@@ -168,9 +168,12 @@ document.addEventListener('pointerover', (e) => {
   const el = e.target instanceof Element && e.target.closest('[data-tip]');
   if (el && el !== tipFor) showTip(el);
 });
+// A tip stays while the element has the focus the keyboard gave it, not one a click gave it (a button just pressed keeps
+// the focus, and its tip must go with the pointer).
 document.addEventListener('pointerout', (e) => {
   const el = e.target instanceof Element && e.target.closest('[data-tip]');
-  if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget)) && el !== document.activeElement) hideTip(el);
+  if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget))
+    && !(el === document.activeElement && lastInput === 'key')) hideTip(el);
 });
 document.addEventListener('focusin', (e) => {
   const el = e.target instanceof Element && e.target.closest('[data-tip]');
