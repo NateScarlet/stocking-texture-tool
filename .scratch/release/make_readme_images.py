@@ -78,6 +78,14 @@ mk = (238, 1, 643, 406)
 save(col([row([load(f'b1-black-moire-area-{a}.png').crop(mk) for a in ('035', '050')]),
           row([load(f'b1-black-moire-area-{a}.png').crop(mk) for a in ('070', '100')])]), 'moire-area.png')
 
+# 纹理层 (试验), on B1's left leg. The Texture page with two layers laid 30 / 70 (Detail at 100%; scaled like the other
+# pages), and one strip of the left thigh down to the knee with 加濑风's share at 0 / 30 / 70 / 100% (细线 for the rest) at
+# the pictures' own pixels: four 200 px tiles 6 px apart, so 818 px wide
+for src, dst in (('b1-black-07-layers-page.png', 'layers-page.jpg'), ('b1-black-07-layers-page-en.png', 'layers-page-en.jpg')):
+    save(shot(src, 1600), dst)
+strip = (350, 300, 550, 700)
+save(row([load(f'b1-black-layers-{s}.png').crop(strip) for s in ('000', '030', '070', '100')], gap=6), 'layers-mix.png')
+
 # UI pages (scaled: overlays and text, no texture to alias)
 save(shot('b1-black-01-guides.png', 1600), 'guides-page.jpg')
 save(shot('b1-black-04-texture-page.png', 1600), 'texture-page.jpg')
