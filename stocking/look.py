@@ -13,7 +13,14 @@ the depth model's bulge, one ring for every fixed step of height (moire_phase, m
 outward by the 面积 slider. It is moire on purpose, as the user asks for it. The texture itself still never aliases
 (the fade in every style), and the bands are far coarser than a pixel and fade out where they would not be, so they
 cannot alias either.
+
+纹理层 (试验): the look can hold several layers, each with its own style, density, tilt, strength and a weight; all of
+them follow the same solved guides. The first layer is the look's own keys, the others are `layers`. Every layer is
+rendered as a whole (the picture with that layer's texture on it) and the renders are mixed pixel by pixel in the
+ratio of the weights, so the mix is the picture plus each texture in its share. The 亮点 and the 摩尔纹效果 go on
+afterwards, once, over the mix; the sparkles take the recipe of the first layer drawn.
 """
+import json
 import re
 import threading
 
@@ -42,7 +49,12 @@ LEGACY_STYLES = {'p_oily': 'oily'}                  # saved by an early version
 SPARKLE_KINDS = ('depth', 'bright', 'painted', 'even')
 DEFAULTS = {'style': 'knit', 'density': 100.0, 'tilt': 32.0, 'strength': 100.0,
             'strength_auto': True, 'sparkle_depth': 100.0, 'sparkle_bright': 100.0, 'sparkle_painted': 0.0,
-            'sparkle_even': 0.0, 'sparkle_link': True, 'moire_on': False, 'moire': 100.0, 'moire_area': 100.0}
+            'sparkle_even': 0.0, 'sparkle_link': True, 'moire_on': False, 'moire': 100.0, 'moire_area': 100.0,
+            'weight': 100.0, 'layers': []}
+# What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. weight is its share of
+# the mix, relative to the other layers' (0 = not drawn); the layers are mixed in the ratio of their weights.
+LAYER_KEYS = ('style', 'density', 'tilt', 'strength', 'strength_auto', 'weight')
+MAX_LAYERS = 4              # the first layer and up to three more: every layer is a whole render
 # Mean lightness step per unit of texture ratio (see suggested_strength) over the dark fixture's stockings, where the
 # presets were tuned: 100% strength reads right at this value.
 STRENGTH_REF = 33.2
@@ -81,7 +93,7 @@ MOIRE_SHARP = 2.2
 MOIRE_LIGHT = 0.13
 MOIRE_TEXTURE = 0.9
 RENDER_KEYS = ('style', 'density', 'tilt', 'strength', 'sparkle_depth', 'sparkle_bright',
-               'sparkle_painted', 'sparkle_even', 'moire_on', 'moire', 'moire_area')
+               'sparkle_painted', 'sparkle_even', 'moire_on', 'moire', 'moire_area', 'weight', 'layers')
 MARGIN = 8                  # px around a crop, so blurs and gradients at its edge see real neighbours
 
 
@@ -99,6 +111,39 @@ def _legacy_sparkles(p):
     p.setdefault('sparkle_link', p['sparkle_depth'] == p['sparkle_bright'])
 
 
+def _flag(v):
+    return v.strip().lower() in ('1', 'true', 'yes') if isinstance(v, str) else bool(v)
+
+
+def _clean_layer(p):
+    """One layer's settings (LAYER_KEYS) from raw ones: defaults filled in and every value range-checked."""
+    q = {k: DEFAULTS[k] for k in LAYER_KEYS}
+    q.update({k: p[k] for k in LAYER_KEYS if p.get(k) is not None})
+    q['style'] = LEGACY_STYLES.get(q['style'], q['style'])
+    if q['style'] not in STYLES:
+        raise ValueError(tr('未知样式：{style}', style=q['style']))
+    q['density'] = float(np.clip(float(q['density']), 40, 200))
+    q['tilt'] = float(np.clip(float(q['tilt']), 0, 75))
+    q['strength'] = float(np.clip(float(q['strength']), 0, 250))
+    q['weight'] = float(np.clip(float(q['weight']), 0, 100))
+    q['strength_auto'] = _flag(q['strength_auto'])
+    if p.get('strength_auto') is None and 'strength' in p:
+        q['strength_auto'] = q['strength'] == 100.0     # settings from before auto strength: a moved slider stays put
+    return q
+
+
+def _clean_layers(v):
+    """The extra layers: a list of settings, or that as JSON (from a query string); at most MAX_LAYERS - 1 of them."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v) if v.strip() else []
+        except ValueError:
+            raise ValueError(tr('纹理层的设置读不了')) from None
+    if not isinstance(v, (list, tuple)):
+        return []
+    return [_clean_layer(x) for x in v if isinstance(x, dict)][:MAX_LAYERS - 1]
+
+
 def clean_params(p):
     """Defaults filled in and every value range-checked."""
     p = dict(p or {})
@@ -108,24 +153,42 @@ def clean_params(p):
     p.pop('sparkle_mix', None)
     q = dict(DEFAULTS)
     q.update({k: v for k, v in p.items() if k in DEFAULTS and v is not None})
-    q['style'] = LEGACY_STYLES.get(q['style'], q['style'])
-    if q['style'] not in STYLES:
-        raise ValueError(tr('未知样式：{style}', style=q['style']))
-    q['density'] = float(np.clip(float(q['density']), 40, 200))
-    q['tilt'] = float(np.clip(float(q['tilt']), 0, 75))
-    q['strength'] = float(np.clip(float(q['strength']), 0, 250))
+    q.update(_clean_layer(p))
+    q['layers'] = _clean_layers(q['layers'])
     q['moire'] = float(np.clip(float(q['moire']), 0, 100))
     q['moire_area'] = float(np.clip(float(q['moire_area']), 0, 100))
     for k in SPARKLE_KINDS:
         q[f'sparkle_{k}'] = float(np.clip(float(q[f'sparkle_{k}']), 0, 300))
-    for k in ('sparkle_link', 'strength_auto', 'moire_on'):
-        v = q[k]
-        q[k] = v.strip().lower() in ('1', 'true', 'yes') if isinstance(v, str) else bool(v)
-    if p.get('strength_auto') is None and 'strength' in p:
-        q['strength_auto'] = q['strength'] == 100.0     # settings from before auto strength: a moved slider stays put
+    for k in ('sparkle_link', 'moire_on'):
+        q[k] = _flag(q[k])
     if q['sparkle_link']:
         q['sparkle_bright'] = q['sparkle_depth']        # linked amounts are one value; depth's wins
     return q
+
+
+def layer_list(q):
+    """The layers of clean params, the first one first: [{style, density, tilt, strength, strength_auto, weight}]."""
+    return [{k: q[k] for k in LAYER_KEYS}, *q['layers']]
+
+
+def drawn_layers(q):
+    """[(layer, share)] of the layers that show, the shares adding up to 1. A layer with no weight draws nothing; with
+    every weight at 0 the first layer is drawn alone."""
+    layers = layer_list(q)
+    shown = [layer for layer in layers if layer['weight'] > 0]
+    if not shown:
+        return [(layers[0], 1.0)]
+    total = sum(layer['weight'] for layer in shown)
+    return [(layer, layer['weight'] / total) for layer in shown]
+
+
+def blend_layers(renders, shares):
+    """The layers' renders (BGR uint8, each the picture with that layer's texture) mixed in the ratio of shares, which
+    add up to 1. Where no layer draws, every render is the picture and so is the mix."""
+    acc = np.zeros(renders[0].shape, np.float32)
+    for img, share in zip(renders, shares):
+        acc += img.astype(np.float32) * np.float32(share)
+    return np.clip(np.round(acc), 0, 255).astype(np.uint8)
 
 
 def geometry(density, w, h):
@@ -437,8 +500,12 @@ class Scene:
             return self._suggested
 
     def resolve(self, q):
-        """Clean params with an automatic strength filled in."""
-        return dict(q, strength=self.suggested_strength()) if q['strength_auto'] else q
+        """Clean params with an automatic strength filled in (for every layer that has one)."""
+        if not (q['strength_auto'] or any(layer['strength_auto'] for layer in q['layers'])):
+            return q
+        auto = self.suggested_strength()
+        return dict(q, strength=auto if q['strength_auto'] else q['strength'],
+                    layers=[dict(layer, strength=auto) if layer['strength_auto'] else layer for layer in q['layers']])
 
     def region_tone(self):
         """knit.region_tone of the whole image, cached: crops take theirs from it, so they match the whole render."""
@@ -627,22 +694,53 @@ class Scene:
         return fade > 0.5, (self.REG > 0) & (self.R == 0)
 
     def fade(self, params):
-        """(fraction of the texture faded by more than half, HxW float32 fade 0..1) for these settings."""
+        """(fraction of the texture faded by more than half, HxW float32 fade 0..1) for these settings. With several
+        layers a pixel's fade is the layers' own, each counted in its share."""
         q = clean_params(params)
-        g = geometry(q['density'], self.w, self.h)
         vx, vy, ax, ay, same = self._gradients()
-        p = g['period']
-        if q['style'] == 'lines':
-            th = np.deg2rad(q['tilt'])
-            sn = np.sin(th * self.side).astype(np.float32)
-            fx, fy = (np.cos(th) * vx + sn * ax) / p, (np.cos(th) * vy + sn * ay) / p
-        else:
-            fx, fy = vx / p, vy / p
-        fade = knit.sstep(g['f_lo'], g['f_hi'], np.hypot(fx, fy)).astype(np.float32) * same
+        fade = np.zeros(same.shape, np.float32)
+        for layer, share in drawn_layers(q):
+            p = geometry(layer['density'], self.w, self.h)
+            f_lo, f_hi, period = p['f_lo'], p['f_hi'], p['period']
+            if layer['style'] == 'lines':
+                th = np.deg2rad(layer['tilt'])
+                sn = np.sin(th * self.side).astype(np.float32)
+                fx, fy = (np.cos(th) * vx + sn * ax) / period, (np.cos(th) * vy + sn * ay) / period
+            else:
+                fx, fy = vx / period, vy / period
+            fade += share * (knit.sstep(f_lo, f_hi, np.hypot(fx, fy)).astype(np.float32) * same)
         n = int(same.sum())
         return (float((fade > 0.5).sum() / n) if n else 0.0), fade
 
     # ------------------------------------------------------------- rendering
+
+    def _draw_layer(self, layer, sl, src, R, V, A, alpha):
+        """One layer over the (margined) crop sl: the picture with this layer's texture, BGR uint8."""
+        g = geometry(layer['density'], self.w, self.h)
+        style, p, s = layer['style'], g['period'], layer['strength'] / 100.0
+        if style == 'coil':
+            gn, gc = self.randoms('grain')[:2]
+            see, trust = self.see_map()
+            out, _ = knit.render_coil(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
+                                      see[sl], trust[sl], (gn[sl], gc[sl]), amp=s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+        elif style in ('knit', 'loops'):
+            draw = knit.render_thread if style == 'knit' else knit.render_loops
+            out, _ = draw(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
+                          amp=(0.10 if style == 'knit' else 0.12) * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+        elif style == 'lines':
+            th = np.deg2rad(layer['tilt'])
+            phase = np.cos(th) * V / p + np.sin(th * self.side[sl]) * A / p
+            out, _ = knit.render_lines(src, R, phase, alpha, amp=0.115 * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+        elif style == 'oily':
+            maps = self.oily_maps()
+            gn, gc = self.randoms('grain')[:2]
+            out = oily.render_oily(src, R, V, A, alpha, g, s, *(m[sl] for m in maps), noise=(gn[sl], gc[sl]))
+        else:
+            gn, gc = self.randoms('grain')[:2]
+            out, _ = knit.render_grain(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, None,
+                                       knit_amp=0.04 * s, grain=0.050 * s, grain_dark=0.020 * s,
+                                       f_lo=g['f_lo'], f_hi=g['f_hi'], noise=(gn[sl], gc[sl]))
+        return out
 
     def render(self, params, rect=None):
         """BGR uint8 render of the whole image, or of rect = (x0, y0, x1, y1) (identical to that area of the whole).
@@ -666,30 +764,11 @@ class Scene:
         X1, Y1 = min(x1 + MARGIN, self.w), min(y1 + MARGIN, self.h)
         sl = (slice(Y0, Y1), slice(X0, X1))
         src, R, V, A, alpha = self.src[sl], self.R[sl], self.V[sl], self.A[sl], self.alpha[sl]
-        p, s = g['period'], q['strength'] / 100.0
-        weight, ready = self.sparkle_weight(q, q['style'], sl)
-        if q['style'] == 'coil':
-            gn, gc = self.randoms('grain')[:2]
-            see, trust = self.see_map()
-            out, _ = knit.render_coil(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
-                                      see[sl], trust[sl], (gn[sl], gc[sl]), amp=s, f_lo=g['f_lo'], f_hi=g['f_hi'])
-        elif q['style'] in ('knit', 'loops'):
-            draw = knit.render_thread if q['style'] == 'knit' else knit.render_loops
-            out, _ = draw(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
-                          amp=(0.10 if q['style'] == 'knit' else 0.12) * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
-        elif q['style'] == 'lines':
-            th = np.deg2rad(q['tilt'])
-            phase = np.cos(th) * V / p + np.sin(th * self.side[sl]) * A / p
-            out, _ = knit.render_lines(src, R, phase, alpha, amp=0.115 * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
-        elif q['style'] == 'oily':
-            maps = self.oily_maps()
-            gn, gc = self.randoms('grain')[:2]
-            out = oily.render_oily(src, R, V, A, alpha, g, s, *(m[sl] for m in maps), noise=(gn[sl], gc[sl]))
-        else:
-            gn, gc = self.randoms('grain')[:2]
-            out, _ = knit.render_grain(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, None,
-                                       knit_amp=0.04 * s, grain=0.050 * s, grain_dark=0.020 * s,
-                                       f_lo=g['f_lo'], f_hi=g['f_hi'], noise=(gn[sl], gc[sl]))
+        drawn = drawn_layers(q)
+        style = drawn[0][0]['style']
+        weight, ready = self.sparkle_weight(q, style, sl)
+        renders = [self._draw_layer(layer, sl, src, R, V, A, alpha) for layer, _ in drawn]
+        out = renders[0] if len(renders) == 1 else blend_layers(renders, [share for _, share in drawn])
         moire_ready = True
         if moire_active(q):
             fringes = self.moire_map(q['moire_area'] / 100.0)
@@ -698,7 +777,7 @@ class Scene:
             else:
                 out = apply_moire(out, src, fringes[sl], q['moire'] / 100.0, self.suggested_strength() / 100.0)
         if weight is not None:
-            r = SPARKLE_RECIPES[q['style']]
+            r = SPARKLE_RECIPES[style]
             u1, u2 = self.randoms('lines') if r['draws'] == 'lines' else self.randoms('grain')[2:]
             out = knit.add_sparkles(out, weight, None, density=r['density'], r_lo=r['r_lo'], r_hi=r['r_hi'],
                                     tint=r['tint'], draws=(u1[sl], u2[sl]))

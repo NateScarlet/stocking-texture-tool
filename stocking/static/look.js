@@ -97,11 +97,32 @@ function pct(x) {
   return x < 0.001 ? t('不到 {p}', { p: PCT[1].format(0.001) }) : PCT[x < 0.1 ? 1 : 0].format(x);
 }
 
-export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboard = () => false }) {
+const MAX_LAYERS = 4;                                                  // as look.MAX_LAYERS
+const LAYER_KEYS = ['style', 'density', 'tilt', 'strength', 'strength_auto', 'weight'];     // as look.LAYER_KEYS
+// the style a new layer starts with: the first of these that no layer has yet
+const NEW_LAYER_STYLES = ['grain', 'lines', 'loops', 'coil', 'knit', 'oily'];
+
+// What the first layer holds, out of the look's own settings (the others are L.params.layers).
+function layerOf(params) {
+  return Object.fromEntries(LAYER_KEYS.map((k) => [k, params[k]]));
+}
+
+// Whether two looks hold the same settings. An automatic strength is worked out per image: its number does not count.
+function sameLook(a, b) {
+  const same = (x, y) => Object.keys(x).every((k) => k === 'layers'
+    || (k === 'strength' && x.strength_auto && y.strength_auto) || x[k] === y[k]);
+  const la = a.layers || [], lb = b.layers || [];
+  return same(a, b) && la.length === lb.length && la.every((x, i) => same(x, lb[i]));
+}
+
+export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboard = () => false,
+  canLook = () => true, goLook = () => {} }) {
   const L = {
     active: false,
     docId: null,
     params: null,
+    layer: 0,              // the 纹理层 the panel shows (0 = the first, whose settings are the look's own)
+    addOnLoad: false,      // + was pressed before the settings were loaded: add the layer as soon as they are
     info: null,
     centre: null,          // crop centre in image px; null = where the courses are densest
     zoom: 2,               // crop magnification, 200% by default
@@ -129,13 +150,127 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   function query(extra) {
     const p = L.params;
     const q = new URLSearchParams({ style: p.style, density: p.density, tilt: p.tilt,
-      strength: p.strength, strength_auto: p.strength_auto,
+      strength: p.strength, strength_auto: p.strength_auto, weight: p.weight, layers: JSON.stringify(p.layers || []),
       sparkle_depth: p.sparkle_depth, sparkle_bright: p.sparkle_bright, sparkle_painted: p.sparkle_painted,
       sparkle_even: p.sparkle_even,
       sparkle_link: p.sparkle_link, moire_on: p.moire_on, moire: p.moire, moire_area: p.moire_area });
     for (const [k, v] of Object.entries(extra || {})) q.set(k, v);
     return q.toString();
   }
+
+  // ---------------------------------------------------------------- 纹理层
+
+  // Style, density, tilt and strength belong to a layer; sparkles and the moiré effect to the whole look. The layers
+  // are mixed in the ratio of their weights; the panel shows each as a share of the whole (weights are kept adding up
+  // to 100, so a weight is its share).
+  const layerCount = () => 1 + ((L.params && L.params.layers) || []).length;
+  const layerAt = (i) => (i === 0 ? L.params : L.params.layers[i - 1]);
+  const allLayers = () => [layerOf(L.params), ...L.params.layers];
+  const layerName = (i) => t('纹理 {n}', { n: i + 1 });
+
+  // Each layer's share as a whole percentage; they add up to 100 (the biggest remainders take the odd points).
+  function shareList() {
+    const ws = allLayers().map((l) => l.weight);
+    const total = ws.reduce((a, b) => a + b, 0);
+    const raw = ws.map((w, i) => (total > 0 ? (100 * w) / total : 100 * +(i === 0)));
+    const out = raw.map(Math.floor);
+    const byRemainder = raw.map((_, i) => i).sort((i, j) => raw[j] - out[j] - (raw[i] - out[i]));
+    const odd = 100 - out.reduce((a, b) => a + b, 0);
+    for (let k = 0; k < odd; k++) out[byRemainder[k]] += 1;
+    return out;
+  }
+
+  // The layers as weights (any scale) put back as a look: weights rescaled to add up to 100.
+  function withLayers(layers) {
+    const total = layers.reduce((a, l) => a + l.weight, 0);
+    const ws = layers.map((l) => (total > 0 ? (100 * l.weight) / total : 100 / layers.length)).map((w) => Math.round(w * 10) / 10);
+    const [first, ...rest] = layers.map((l, i) => ({ ...l, weight: ws[i] }));
+    return { ...first, layers: rest };
+  }
+
+  // A change to the layer shown.
+  function setLayer(changes, opts) {
+    if (L.layer === 0) { set(changes, opts); return; }
+    set({ layers: L.params.layers.map((l, j) => (j === L.layer - 1 ? { ...l, ...changes } : l)) }, opts);
+  }
+
+  // Moving one share moves the others in proportion, so the shares keep adding up to 100.
+  function setShare(value) {
+    const ws = allLayers().map((l) => l.weight);
+    const total = ws.reduce((a, b) => a + b, 0);
+    const v = Math.min(100, Math.max(0, value));
+    const rest = total - ws[L.layer];
+    set(withLayers(allLayers().map((l, i) => ({
+      ...l, weight: i === L.layer ? v : rest > 0 ? (l.weight * (100 - v)) / rest : (100 - v) / (ws.length - 1),
+    }))));
+  }
+
+  // A new layer takes an equal share, the others give way evenly; it starts with the defaults, in a style no layer has.
+  function addLayer() {
+    if (!L.params) {                    // the settings are not here yet: enter 纹理 and add it once they are
+      L.addOnLoad = true;
+      goLook();
+      return;
+    }
+    const n = layerCount() + 1;
+    if (n > MAX_LAYERS) return;
+    const have = new Set(allLayers().map((l) => l.style));
+    const total = allLayers().reduce((a, l) => a + l.weight, 0);
+    const kept = allLayers().map((l) => ({ ...l, weight: total > 0 ? (l.weight * (100 - 100 / n)) / total : (100 - 100 / n) / (n - 1) }));
+    kept.push({ style: NEW_LAYER_STYLES.find((s) => !have.has(s)) || 'grain', density: 100, tilt: 32,
+      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100 / n });
+    L.layer = n - 1;
+    set(withLayers(kept));
+    goLook();
+  }
+
+  function deleteLayer() {
+    if (layerCount() < 2) return;
+    const left = allLayers().filter((_, i) => i !== L.layer);
+    L.layer = Math.min(L.layer, left.length - 1);
+    set(withLayers(left));
+    goLook();
+    flash(t('已删除一层纹理'));
+  }
+
+  function selectLayer(i) {
+    L.layer = L.params && i < layerCount() ? i : 0;
+    goLook();
+    if (L.params) renderControls();
+  }
+
+  // One tab for each layer after the first (the first is the 纹理 tab), and the + beside them.
+  const tabsBox = $('#layer-tabs');
+  const addBtn = $('#btn-layer-add');
+
+  function renderTabs() {
+    const extra = L.params ? layerCount() - 1 : tabsBox.childElementCount;
+    if (tabsBox.childElementCount === extra) return;
+    tabsBox.replaceChildren(...Array.from({ length: extra }, (_, k) => {
+      const b = document.createElement('button');
+      b.className = 'mode';
+      b.dataset.mode = 'look';
+      b.dataset.layer = String(k + 1);
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-controls', 'pane-look');
+      b.setAttribute('aria-selected', 'false');
+      b.textContent = layerName(k + 1);
+      b.addEventListener('click', () => selectLayer(k + 1));
+      return b;
+    }));
+    if (L.active) goLook();             // the tabs just made are marked by the page
+  }
+
+  function renderAdd() {
+    const full = !!L.params && layerCount() >= MAX_LAYERS;
+    addBtn.disabled = !canLook() || full;
+    addBtn.title = full ? t('最多 {n} 层纹理', { n: MAX_LAYERS }) : t('加一层纹理，和现在的纹理按比例叠在一起（试验）');
+  }
+
+  $('#tab-look').addEventListener('click', () => selectLayer(0));
+  addBtn.addEventListener('click', addLayer);
+  $('#btn-layer-delete').addEventListener('click', deleteLayer);
+  $('#layer-share').addEventListener('input', (e) => setShare(+e.target.value));
 
   // With 关联 on, depth and brightness always hold the same amount: moving either moves both to that value.
   function setAmount(key, value) {
@@ -158,18 +293,22 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     if (L.beforeReset && changes !== L.beforeReset) { L.beforeReset = null; renderReset(); }   // a new change ends the undo window
     if (L.beforeLoad && !keepLoad) L.beforeLoad = null;                                       // and 撤销载入's too
     Object.assign(L.params, changes);
+    if (L.layer >= layerCount()) L.layer = layerCount() - 1;                                  // a layer is gone
     renderControls();
     if (immediate) requestCrop();
     saveSoon();
     fitSoon();
   }
 
-  // While strength is automatic the server picks it from the stockings' lightness; show what it picked.
+  // While strength is automatic the server picks it from the stockings' lightness; show what it picked (for every
+  // layer that has an automatic strength: they all take the same one).
   function adoptInfo(info) {
     const moved = !L.centre && L.info && String(L.info.densest) !== String(info.densest);
     L.info = info;
-    if (L.params && L.params.strength_auto && info.params.strength !== L.params.strength) {
-      L.params.strength = info.params.strength;
+    const p = L.params, auto = info.strength_suggested;
+    if (p && ((p.strength_auto && p.strength !== auto) || p.layers.some((l) => l.strength_auto && l.strength !== auto))) {
+      if (p.strength_auto) p.strength = auto;
+      p.layers = p.layers.map((l) => (l.strength_auto ? { ...l, strength: auto } : l));
       renderControls();
     }
     renderInfo();
@@ -363,9 +502,21 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   // ---------------------------------------------------------------- panel
 
   function renderControls() {
-    const p = L.params;
+    const all = L.params;                // sparkles and the moiré effect: one setting for the whole look
     const doc = getDoc();
-    if (!p || !doc) return;
+    if (!all || !doc) return;
+    renderTabs();
+    renderAdd();
+    const p = layerAt(L.layer);          // style, density, tilt and strength: the layer shown
+    const many = layerCount() > 1;
+    $('#layer-section').hidden = !many;
+    if (many) {
+      const shares = shareList(), share = shares[L.layer];
+      $('#layer-title').textContent = layerName(L.layer);
+      $('#layer-share').value = share;
+      setVal($('#layer-share-val'), share, '%');
+      $('#layer-ratio').textContent = shares.map((s, i) => `${layerName(i)} ${s}%`).join(' · ');
+    }
     for (const b of document.querySelectorAll('.styles .opt')) b.setAttribute('aria-checked', String(b.dataset.style === p.style));
     $('#style-note').textContent = STYLE_NOTES[p.style];
     $('#density').value = p.density;
@@ -388,16 +539,16 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     $('#strength-auto').hidden = !p.strength_auto;
     $('#btn-strength-auto').hidden = !!p.strength_auto;
     for (const k of ['depth', 'bright', 'painted', 'even']) {
-      $(`#sparkle-${k}`).value = p[`sparkle_${k}`];
-      setVal($(`#sparkle-${k}-val`), p[`sparkle_${k}`], '%');
+      $(`#sparkle-${k}`).value = all[`sparkle_${k}`];
+      setVal($(`#sparkle-${k}-val`), all[`sparkle_${k}`], '%');
     }
-    $('#btn-sparkle-link').setAttribute('aria-pressed', String(!!p.sparkle_link));
-    $('#moire-on').checked = !!p.moire_on;
-    $('#moire-fields').hidden = !p.moire_on;
-    $('#moire').value = p.moire;
-    setVal($('#moire-val'), p.moire, '%');
-    $('#moire-area').value = p.moire_area;
-    setVal($('#moire-area-val'), p.moire_area, '%');
+    $('#btn-sparkle-link').setAttribute('aria-pressed', String(!!all.sparkle_link));
+    $('#moire-on').checked = !!all.moire_on;
+    $('#moire-fields').hidden = !all.moire_on;
+    $('#moire').value = all.moire;
+    setVal($('#moire-val'), all.moire, '%');
+    $('#moire-area').value = all.moire_area;
+    setVal($('#moire-area-val'), all.moire_area, '%');
     $('#btn-check').setAttribute('aria-pressed', String(L.showCheck));
     $('#check-legend').hidden = !L.showCheck;
     $('#peek-hint').hidden = L.showCheck;
@@ -465,11 +616,10 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
 
   function presetOf(name) { return name ? L.presets.find((p) => p.name === name) : undefined; }
 
-  // Whether the settings differ from the preset. An automatic strength is worked out per image: its number does not count.
+  // Whether the settings differ from the preset (see sameLook).
   function presetModified(p) {
     if (!p || !p.params || !L.params) return false;
-    return Object.keys(p.params).some((k) => !(k === 'strength' && p.params.strength_auto && L.params.strength_auto)
-      && L.params[k] !== p.params[k]);
+    return !sameLook(p.params, L.params);
   }
 
   function renderPresetList() {
@@ -531,7 +681,10 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     }
     if (!L.beforeLoad) L.beforeLoad = { params: { ...L.params }, name: was };
     const next = { ...p.params };
-    if (next.strength_auto && L.info) next.strength = L.info.strength_suggested;       // worked out for this image
+    if (L.info) {                                                                          // worked out for this image
+      if (next.strength_auto) next.strength = L.info.strength_suggested;
+      next.layers = (next.layers || []).map((l) => (l.strength_auto ? { ...l, strength: L.info.strength_suggested } : l));
+    }
     set(next, { keepLoad: true });
     flash(t('已载入预设“{name}”；想回去，点“撤销载入”', { name }));
   }
@@ -639,12 +792,14 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     if (!getDoc() || getDoc().id !== doc.id) return;
     L.info = info;
     L.params = { ...info.params };
+    if (L.layer >= layerCount()) L.layer = layerCount() - 1;
     renderControls();
     renderInfo();
     layout();
     renderFitStatus();
     requestCrop();
     requestFit();
+    if (L.addOnLoad) { L.addOnLoad = false; addLayer(); }
   }
 
   function refresh() {
@@ -662,11 +817,11 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
 
   // ---------------------------------------------------------------- input
 
-  for (const b of document.querySelectorAll('.styles .opt')) b.addEventListener('click', () => set({ style: b.dataset.style }));
-  $('#density').addEventListener('input', (e) => set({ density: +e.target.value }));
-  $('#tilt').addEventListener('input', (e) => set({ tilt: +e.target.value }));
-  $('#strength').addEventListener('input', (e) => set({ strength: +e.target.value, strength_auto: false }));
-  $('#btn-strength-auto').addEventListener('click', () => set({ strength_auto: true }));
+  for (const b of document.querySelectorAll('.styles .opt')) b.addEventListener('click', () => setLayer({ style: b.dataset.style }));
+  $('#density').addEventListener('input', (e) => setLayer({ density: +e.target.value }));
+  $('#tilt').addEventListener('input', (e) => setLayer({ tilt: +e.target.value }));
+  $('#strength').addEventListener('input', (e) => setLayer({ strength: +e.target.value, strength_auto: false }));
+  $('#btn-strength-auto').addEventListener('click', () => setLayer({ strength_auto: true }));
   $('#sparkle-depth').addEventListener('input', (e) => setAmount('sparkle_depth', +e.target.value));
   $('#sparkle-bright').addEventListener('input', (e) => setAmount('sparkle_bright', +e.target.value));
   $('#sparkle-painted').addEventListener('input', (e) => set({ sparkle_painted: +e.target.value }));
@@ -715,7 +870,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   const resetBtn = $('#btn-look-reset');
   function renderReset() {
     resetBtn.textContent = L.beforeReset ? t('撤销恢复默认') : t('全部恢复默认');
-    resetBtn.title = L.beforeReset ? t('回到恢复默认之前的设置') : t('样式、密度、斜度、强度、亮点和摩尔纹效果都回到默认值');
+    resetBtn.title = L.beforeReset ? t('回到恢复默认之前的设置') : t('纹理层、样式、密度、斜度、强度、亮点和摩尔纹效果都回到默认值');
   }
   resetBtn.addEventListener('click', () => {
     if (L.beforeReset) {
@@ -729,7 +884,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     const before = { ...L.params };
     const layer = !!(L.info && L.info.has_sparkle_layer);       // a painted 亮点 layer is the default when there is one
     set({ style: 'knit', density: 100, tilt: 32,
-      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true,
+      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100, layers: [],
       sparkle_depth: layer ? 0 : 100,
       sparkle_bright: layer ? 0 : 100, sparkle_painted: layer ? 100 : 0, sparkle_even: 0, sparkle_link: true,
       moire_on: false, moire: 100, moire_area: 100 });
@@ -819,6 +974,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
 
   return {
     params() { return L.params ? { ...L.params } : null; },
+    layer() { return L.layer; },
     enter() {
       L.active = true;
       for (const b of document.querySelectorAll('.seg-btn[data-zoom]')) b.setAttribute('aria-checked', String(+b.dataset.zoom === L.zoom));
@@ -832,13 +988,16 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
         L.docId = st ? st.id : null;
         L.coverageV = st ? st.coverage_v : null;
         Object.assign(L, { params: null, info: null, centre: null, fitImg: null, checkImg: null, cropImg: null,
-          beforeReset: null, beforeLoad: null, presetName: null,
+          beforeReset: null, beforeLoad: null, presetName: null, layer: 0, addOnLoad: false,
           cropCheckImg: null,
           cropRect: null });
+        tabsBox.replaceChildren();
         renderPresetState();
+        renderAdd();
         if (L.active && st) load().catch((e) => flash(e.message, true));
         return;
       }
+      renderAdd();
       renderExclude();
       if (st.coverage_v !== L.coverageV) {        // 颜色排除 toggled (or undone), a mask changed: new coverage
         L.coverageV = st.coverage_v;

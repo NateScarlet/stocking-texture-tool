@@ -46,7 +46,7 @@ const cv = $('#view');
 const ctx = cv.getContext('2d');
 const stage = $('#stage');
 const lookUI = createLook({ getDoc: () => S.doc, getArt: () => S.art, request, edit, flash,
-  focusByKeyboard: () => !focusByPointer });
+  focusByKeyboard: () => !focusByPointer, canLook: () => canLook(), goLook: () => setMode('look') });
 
 // 纹理 opens once some painted region has a 走向 line: before that there is no texture to look at.
 function canLook(st = S.doc) {
@@ -63,7 +63,10 @@ function setMode(m) {
   const changed = S.mode !== m;
   S.mode = m;
   document.body.dataset.mode = m;
-  for (const b of document.querySelectorAll('.mode')) b.setAttribute('aria-selected', String(b.dataset.mode === m));
+  // 纹理 has a tab for each 纹理层 (look.js adds them): only the one being edited is selected
+  for (const b of document.querySelectorAll('.mode')) {
+    b.setAttribute('aria-selected', String(b.dataset.mode === m && (m !== 'look' || +b.dataset.layer === lookUI.layer())));
+  }
   const url = new URL(location.href);
   if (m === 'look') url.searchParams.set('page', 'look'); else url.searchParams.delete('page');
   if (url.href !== location.href) history.replaceState(null, '', url);

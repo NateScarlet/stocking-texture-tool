@@ -16,8 +16,11 @@
   <button id="btn-open" class="btn" title="打开 (Ctrl+O)">打开…</button>
   <div class="modes" role="tablist" aria-label="页面">
     <button class="mode" id="tab-edit" data-mode="edit" role="tab" aria-controls="pane-edit" title="涂部位、画走向线">引导</button>
-    <button class="mode" id="tab-look" data-mode="look" role="tab" aria-controls="pane-look">纹理</button>
+    <button class="mode" id="tab-look" data-mode="look" data-layer="0" role="tab" aria-controls="pane-look">纹理</button>
+    <span id="layer-tabs" class="layer-tabs"></span>
   </div>
+  <button id="btn-layer-add" class="layer-add" type="button" aria-label="加一层纹理"
+          title="加一层纹理，和现在的纹理按比例叠在一起（试验）" disabled>+</button>
   <div class="spacer"></div>
   <button id="btn-undo" class="btn" title="撤销 (Ctrl+Z)" disabled>撤销</button>
   <button id="btn-redo" class="btn" title="重做 (Ctrl+Shift+Z)" disabled>重做</button>
@@ -102,6 +105,19 @@
       <button id="btn-preset-delete" class="btn small" type="button" title="删除选中的预设">删除</button>
     </div>
     <p class="sub preset-note"><span id="preset-note"></span> <button id="btn-preset-undo" class="text-btn small" type="button" hidden></button></p>
+  </section>
+
+  <section class="group" id="layer-section" hidden>
+    <div class="group-head">
+      <h2 id="layer-title"></h2>
+      <button id="btn-layer-delete" class="text-btn small layer-delete" type="button">删除这层</button>
+    </div>
+    <div class="field">
+      <div class="field-head"><label for="layer-share">占比</label><span id="layer-share-val" class="val num"></span></div>
+      <input id="layer-share" type="range" min="0" max="100" step="1" value="100">
+      <p id="layer-ratio" class="sub"></p>
+    </div>
+    <p class="note">每一层都按同一套走向线画，再按占比叠在一起。亮点和摩尔纹效果在叠好之后加，对所有层都一样。</p>
   </section>
 
   <section class="group">
@@ -221,7 +237,7 @@
       <p>薄丝袜透出肤色的地方（膝盖、脚尖）偏暖，有时会被误当成皮肤排除掉。这时关掉它，部位里每一处都加纹理。点细节上方的“标出问题”可以看到哪里被排除了（蓝色）。</p>
     </div>
     <p id="exclude-note" class="note"></p>
-    <button id="btn-look-reset" class="text-btn" title="样式、密度、斜度、强度、亮点和摩尔纹效果都回到默认值">全部恢复默认</button>
+    <button id="btn-look-reset" class="text-btn" title="纹理层、样式、密度、斜度、强度、亮点和摩尔纹效果都回到默认值">全部恢复默认</button>
   </section>
  </div>
 </aside>

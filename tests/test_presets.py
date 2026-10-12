@@ -26,6 +26,19 @@ def test_a_preset_is_the_cleaned_settings_and_keeps_an_automatic_strength_out():
     assert presets.listing()[1]['params']['strength'] == 45
 
 
+def test_a_preset_keeps_the_layers_and_their_weights_and_keeps_automatic_strengths_out():
+    presets.save('两层', {'style': 'knit', 'weight': 30, 'strength': 45, 'strength_auto': True,
+                          'layers': [{'style': 'grain', 'weight': 70, 'strength': 90, 'strength_auto': True},
+                                     {'style': 'lines', 'weight': 20, 'strength': 90, 'strength_auto': False}]})
+    (p,) = presets.listing()
+    first, second, third = look.layer_list(p['params'])
+    assert (first['weight'], second['style'], second['weight'], third['style']) == (30, 'grain', 70, 'lines')
+    assert (first['strength'], second['strength']) == (look.DEFAULTS['strength'],) * 2 and third['strength'] == 90
+    assert presets.snapshot(p['params']) == p['params']
+    presets.save('旧', {'style': 'loops'})
+    assert presets.listing()[1]['params']['layers'] == []
+
+
 def test_a_preset_keeps_the_moire_settings_and_one_saved_before_them_reads_as_off():
     presets.save('水波', {'style': 'knit', 'moire_on': True, 'moire': 60, 'moire_area': 35})
     (p,) = presets.listing()

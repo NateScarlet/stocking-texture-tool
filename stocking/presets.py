@@ -1,7 +1,8 @@
 """Look presets: named snapshots of the 纹理 settings, kept per user in settings.json, not with an image.
 
 A preset is look.clean_params of the settings it was saved from, so it holds whatever the panel holds (a later
-version's new settings come along). An automatic strength is stored as the default: it is worked out per image.
+version's new settings come along), the 纹理层 included. An automatic strength is stored as the default: it is worked
+out per image.
 
 Saving checks everything. Reading never fails on one bad entry (an unknown style, a value out of range, a key from a
 newer version): that entry is listed as unreadable, and the file is not rewritten on read, so presets saved by a newer
@@ -38,8 +39,9 @@ def clean_name(name):
 def snapshot(params):
     """The settings as a preset stores them (look.clean_params, ValueError if they are not valid)."""
     q = look.clean_params(params)
-    if q['strength_auto']:
-        q['strength'] = look.DEFAULTS['strength']
+    for layer in (q, *q['layers']):
+        if layer['strength_auto']:
+            layer['strength'] = look.DEFAULTS['strength']
     return q
 
 

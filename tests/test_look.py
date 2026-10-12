@@ -1,3 +1,5 @@
+import json
+
 import cv2
 import numpy as np
 import pytest
@@ -778,3 +780,155 @@ def test_the_depth_model_is_started_for_the_moire(monkeypatch):
     assert started == [d] and d._depth_started
     server._want_depth(d, q(moire_on=True, moire=40))                        # once is enough
     assert started == [d]
+
+
+# ---------------------------------------------------------------- 纹理层
+
+def _single(s, **kw):
+    return s.render(dict(OFF, **kw))[0]
+
+
+def test_a_look_is_one_layer_until_layers_are_added():
+    q = look.clean_params({})
+    assert q['weight'] == 100 and q['layers'] == []
+    assert look.layer_list(q) == [dict(style='knit', density=100, tilt=32, strength=100, strength_auto=True, weight=100)]
+    assert look.drawn_layers(q) == [(look.layer_list(q)[0], 1.0)]
+    q['layers'].append('changed')
+    assert look.clean_params({})['layers'] == [] and look.DEFAULTS['layers'] == []        # defaults are never shared
+    assert 'weight' in look.RENDER_KEYS and 'layers' in look.RENDER_KEYS
+
+
+def test_layers_are_cleaned_like_the_first_layer():
+    raw = [{'style': 'grain', 'density': 500, 'weight': -3}, {'style': 'p_oily', 'strength': 60, 'tilt': 20},
+           'junk', {'style': 'lines', 'weight': '40', 'strength_auto': 'false', 'strength': 80}]
+    q = look.clean_params({'style': 'knit', 'weight': 250, 'layers': raw})
+    a, b, c = q['layers']
+    assert q['weight'] == 100
+    assert (a['style'], a['density'], a['weight'], a['strength_auto']) == ('grain', 200, 0, True)
+    assert (b['style'], b['strength'], b['strength_auto'], b['tilt']) == ('oily', 60, False, 20)   # a set strength stays
+    assert (c['style'], c['weight'], c['strength_auto'], c['strength']) == ('lines', 40, False, 80)
+    assert look.clean_params({'layers': json.dumps(raw)}) == look.clean_params({'layers': raw})     # from a query string
+    assert look.clean_params({'layers': ''})['layers'] == [] and look.clean_params({'layers': 'null'})['layers'] == []
+    assert len(look.clean_params({'layers': [{}] * 9})['layers']) == look.MAX_LAYERS - 1
+    for bad in ({'layers': [{'style': 'nope'}]}, {'layers': '{not json'}, {'layers': [{'density': 'x'}]}):
+        with pytest.raises(ValueError):
+            look.clean_params(bad)
+
+
+def test_the_server_reads_layers_from_the_query_string():
+    import types
+    from urllib.parse import urlencode
+    from starlette.requests import Request
+    from stocking import server
+    layers = [{'style': 'grain', 'weight': 70}]
+    query = urlencode({'style': 'knit', 'weight': 30, 'layers': json.dumps(layers)}).encode()
+    q = server._params(Request({'type': 'http', 'query_string': query, 'headers': []}),
+                       types.SimpleNamespace(look=None, sparkle=None))
+    assert q['weight'] == 30 and [layer['style'] for layer in q['layers']] == ['grain'] and q['layers'][0]['weight'] == 70
+    saved = types.SimpleNamespace(look=look.clean_params({'layers': layers}), sparkle=None)
+    q = server._params(Request({'type': 'http', 'query_string': b'density=90', 'headers': []}), saved)
+    assert q['density'] == 90 and len(q['layers']) == 1                       # the document's saved layers, kept
+
+
+def test_two_layers_are_mixed_in_the_ratio_of_their_weights():
+    s, _, _ = _dome()
+    a, b = _single(s, style='knit'), _single(s, style='grain')
+    assert not np.array_equal(a, b)
+    mix, info = s.render(dict(OFF, style='knit', weight=30, layers=[{'style': 'grain', 'weight': 70}]))
+    assert np.array_equal(mix, look.blend_layers([a, b], [0.3, 0.7]))
+    assert np.abs(mix.astype(float) - (0.3 * a + 0.7 * b)).max() <= 0.5 + 1e-3            # rounding only
+    assert info['style'] == 'knit'
+    assert np.array_equal(s.render(dict(OFF, style='knit', weight=3, layers=[{'style': 'grain', 'weight': 7}]))[0], mix)
+    off = s.R == 0
+    assert np.array_equal(a[off], b[off]) and np.array_equal(mix[off], a[off])            # off the stockings: the picture
+    assert np.abs(mix.astype(int) - a).max() > 0 and np.abs(mix.astype(int) - b).max() > 0
+
+
+def test_each_layer_keeps_its_own_settings():
+    s, _, _ = _dome()
+    one = dict(style='lines', density=100, tilt=20, strength=80, strength_auto=False)
+    two = dict(style='loops', density=70, tilt=32, strength=150, strength_auto=False)
+    mix = s.render(dict(OFF, weight=25, layers=[dict(two, weight=75)], **one))[0]
+    assert np.array_equal(mix, look.blend_layers([_single(s, **one), _single(s, **two)], [0.25, 0.75]))
+    three = dict(one, style='knit', strength=30)
+    mix = s.render(dict(OFF, weight=1, layers=[dict(two, weight=2), dict(three, weight=1)], **one))[0]
+    want = look.blend_layers([_single(s, **one), _single(s, **two), _single(s, **three)], [0.25, 0.5, 0.25])
+    assert np.array_equal(mix, want)
+
+
+def test_a_layer_with_no_weight_is_not_drawn_and_a_lone_layer_ignores_its_weight():
+    s, _, _ = _dome()
+    a, b = _single(s, style='knit'), _single(s, style='grain')
+    assert np.array_equal(s.render(dict(OFF, style='knit', layers=[{'style': 'grain', 'weight': 0}]))[0], a)
+    assert np.array_equal(s.render(dict(OFF, style='knit', weight=0, layers=[{'style': 'grain', 'weight': 50}]))[0], b)
+    assert np.array_equal(s.render(dict(OFF, style='knit', weight=0, layers=[{'style': 'grain', 'weight': 0}]))[0], a)
+    assert np.array_equal(s.render(dict(OFF, style='knit', weight=20))[0], a)
+    assert look.drawn_layers(look.clean_params({'weight': 0, 'layers': [{'weight': 0}]}))[0][1] == 1.0
+
+
+def test_a_look_without_layers_renders_as_it_did():
+    """The first layer is the look's own keys: nothing changes for settings saved before there were layers."""
+    s, _, _ = _dome()
+    for style in look.STYLES:
+        plain = _single(s, style=style, sparkle_even=40)
+        assert np.array_equal(s.render(dict(OFF, style=style, sparkle_even=40, layers=[]))[0], plain)
+        assert np.array_equal(s.render(dict(OFF, style=style, sparkle_even=40, weight=10))[0], plain)
+
+
+@pytest.mark.parametrize('style', look.STYLES)
+def test_a_crop_of_layers_is_the_same_area_of_the_whole(style):
+    s, _, _ = _dome()
+    other = look.STYLES[(look.STYLES.index(style) + 1) % len(look.STYLES)]
+    p = dict(OFF, style=style, weight=40, layers=[{'style': other, 'weight': 35, 'density': 80},
+                                                  {'style': 'lines', 'weight': 25, 'tilt': 20}],
+             sparkle_even=60, moire_on=True, moire=70)
+    whole, info = s.render(p)
+    assert info['moire_ready']
+    for rect in [(100, 150, 300, 400), (0, 0, 64, 64), (330, 540, 400, 600)]:
+        x0, y0, x1, y1 = rect
+        assert np.array_equal(s.render(p, rect)[0], whole[y0:y1, x0:x1]), rect
+
+
+@pytest.mark.parametrize('first', ['knit', 'lines'])
+def test_sparkles_and_moire_go_on_once_over_the_mix_with_the_first_layers_recipe(first):
+    s, disp, _ = _dome()
+    layers = dict(style=first, weight=50, layers=[{'style': 'grain', 'weight': 50}])
+    mix = s.render(dict(OFF, **layers))[0]
+    p = dict(OFF, sparkle_even=100, **layers)
+    q = look.clean_params(p)
+    weight, ready = s.sparkle_weight(q, first)
+    r = look.SPARKLE_RECIPES[first]
+    u1, u2 = s.randoms('lines') if r['draws'] == 'lines' else s.randoms('grain')[2:]
+    want = knit.add_sparkles(mix, weight, None, density=r['density'], r_lo=r['r_lo'], r_hi=r['r_hi'], tint=r['tint'],
+                             draws=(u1, u2))
+    assert ready and not np.array_equal(want, mix)
+    assert np.array_equal(s.render(p)[0], want)
+    fringes = s.moire_map(1.0)
+    got = s.render(dict(OFF, moire_on=True, moire=100, **layers))[0]
+    assert np.array_equal(got, look.apply_moire(mix, s.src, fringes, 1.0, s.suggested_strength() / 100.0))
+
+
+def test_every_layer_with_an_automatic_strength_gets_the_suggested_one():
+    s, _, _ = _dome()
+    q = look.clean_params({'layers': [{'style': 'grain'}, {'style': 'lines', 'strength': 60}]})
+    r = s.resolve(q)
+    assert r['strength'] == s.suggested_strength() and r['layers'][0]['strength'] == s.suggested_strength()
+    assert r['layers'][1]['strength'] == 60 and q['layers'][0]['strength'] == 100          # the settings are not touched
+    fixed = look.clean_params({'strength': 70, 'strength_auto': False, 'layers': [{'strength': 60, 'strength_auto': False}]})
+    assert s.resolve(fixed) is fixed
+    assert np.array_equal(s.render(dict(OFF, layers=[{'style': 'grain'}]))[0],
+                          s.render(dict(OFF, strength=s.suggested_strength(), strength_auto=False,
+                                        layers=[{'style': 'grain', 'strength': s.suggested_strength(),
+                                                 'strength_auto': False}]))[0])
+
+
+def test_the_fade_of_layers_is_each_layers_own_in_its_share():
+    s = _flat((120, 100, 104), h=300, w=300, freq=2.0)        # courses so close that knit fades away, lines in part
+    knit_only = s.fade(dict(style='knit'))[1]
+    slanted = s.fade(dict(style='lines', tilt=75))[1]
+    assert knit_only.max() > 0.9 and 0.2 < slanted.mean() < 0.8
+    frac, mix = s.fade(dict(style='knit', weight=25, layers=[{'style': 'lines', 'tilt': 75, 'weight': 75}]))
+    assert np.allclose(mix, 0.25 * knit_only + 0.75 * slanted, atol=1e-6)
+    assert np.array_equal(s.fade(dict(style='knit', weight=10))[1], knit_only)             # alone, weight does not matter
+    faded, _ = s.check(dict(style='knit', weight=25, layers=[{'style': 'lines', 'tilt': 75, 'weight': 75}]))
+    assert np.array_equal(faded, mix > 0.5)

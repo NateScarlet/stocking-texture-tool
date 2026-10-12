@@ -134,6 +134,14 @@ input[type="checkbox"] { margin: 0; accent-color: var(--chalk); }
 .mode:hover:not([aria-disabled="true"]):not([aria-selected="true"]) { color: var(--text); }
 .mode[aria-selected="true"] { background: var(--chalk); color: var(--on-chalk); font-weight: 700; }
 .mode[aria-disabled="true"] { color: var(--faint); cursor: default; }
+.layer-tabs { display: contents; }
+/* + beside the page tabs: one more 纹理层 */
+.layer-add {
+  width: 30px; height: 30px; padding: 0; border-radius: 4px; background: var(--float); color: var(--muted);
+  font-size: 18px; line-height: 1;
+}
+.layer-add:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.layer-add:disabled { color: var(--faint); cursor: default; }
 .tip {
   position: absolute; z-index: 20; left: 0; top: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px;
   background: var(--float); box-shadow: var(--elev); font-size: 12px; white-space: nowrap; pointer-events: none;
@@ -362,6 +370,7 @@ body[data-mode="edit"] .look-only, body[data-mode="look"] .edit-only { display: 
 .preset-row select:hover:not(:disabled) { background: var(--hover); }
 .preset-row select:disabled { color: var(--faint); cursor: default; }
 .preset-note { overflow-wrap: anywhere; }
+.layer-delete { margin-left: auto; }
 .opt { height: 32px; border-radius: 3px; background: var(--raised); font-size: 13px; white-space: nowrap; }
 .opt:hover { background: var(--hover); }
 .opt[aria-checked="true"] { background: var(--chalk); color: var(--on-chalk); font-weight: 700; }
