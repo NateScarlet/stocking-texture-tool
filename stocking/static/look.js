@@ -98,6 +98,7 @@ function pct(x) {
 }
 
 const MAX_LAYERS = 4;                                                  // as look.MAX_LAYERS
+const GESTURE_MS = 700;                                                // a slider at rest this long: the next move is a new step
 const DEFAULT_AMOUNT = 50;                                             // as look.DEFAULT_AMOUNT
 const LAYER_KEYS = ['style', 'density', 'tilt', 'strength', 'strength_auto', 'weight', 'amount'];     // as look.LAYER_KEYS
 // the style a new layer starts with: the first of these that no layer has yet
@@ -119,7 +120,7 @@ function sameLook(a, b) {
 }
 
 export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboard = () => false,
-  canLook = () => true, goLook = () => {} }) {
+  canLook = () => true, goLook = () => {}, onHistory = () => {} }) {
   const L = {
     active: false,
     docId: null,
@@ -127,6 +128,10 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     layer: 0,              // the 纹理层 the panel shows (0 = the first, whose settings are the look's own)
     addOnLoad: false,      // + was pressed before the settings were loaded: add the layer as soon as they are
     info: null,
+    lookRev: 0,            // the server's count of undos and redos of the look: it moved, so the settings changed under us
+    gesture: null,         // what the last change was (a slider being dragged), when
+    gestureAt: 0,
+    newStep: true,         // the changes not saved yet begin a step of the 纹理 history (else they go on the last one)
     centre: null,          // crop centre in image px; null = where the courses are densest
     zoom: 2,               // crop magnification, 200% by default
     showCheck: false,
@@ -220,13 +225,14 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   // to 100. Off: it is this layer's own amount and nothing else moves.
   function setLevel(i, value) {
     const v = Math.min(100, Math.max(0, value));
-    if (!L.params.lock_total) { setLayerAt(i, { amount: v }); return; }
+    const gesture = `blend:${i}`;
+    if (!L.params.lock_total) { setLayerAt(i, { amount: v }, { gesture }); return; }
     const layers = allLayers();
     const total = layers.reduce((a, l) => a + l.weight, 0);
     const rest = total - layers[i].weight;
     set(withLayers(layers.map((l, j) => ({
       ...l, weight: j === i ? v : rest > 0 ? (l.weight * (100 - v)) / rest : (100 - v) / (layers.length - 1),
-    }))));
+    }))), { gesture });
   }
 
   // A new layer starts with the defaults, in a style no layer has, and takes an equal share of the weights (the others
@@ -394,7 +400,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
 
   // With 关联 on, depth and brightness always hold the same amount: moving either moves both to that value.
   function setAmount(key, value) {
-    set(L.params.sparkle_link ? { sparkle_depth: value, sparkle_bright: value } : { [key]: value });
+    set(L.params.sparkle_link ? { sparkle_depth: value, sparkle_bright: value } : { [key]: value }, { gesture: key });
   }
 
   // Turning 关联 on makes the two equal, taking the depth amount.
@@ -409,9 +415,14 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     return { raw, period: Math.max(raw, 3.2), clamped: raw < 3.2 };
   }
 
-  function set(changes, { immediate = true, keepLoad = false } = {}) {
+  function set(changes, { immediate = true, keepLoad = false, gesture = null } = {}) {
     if (L.beforeReset && changes !== L.beforeReset) { L.beforeReset = null; renderReset(); }   // a new change ends the undo window
     if (L.beforeLoad && !keepLoad) L.beforeLoad = null;                                       // and 撤销载入's too
+    // A step of the 纹理 history: a click is one; so is a drag of a slider (its `gesture`), till it rests a moment.
+    const now = performance.now();
+    if (!gesture || gesture !== L.gesture || now - L.gestureAt > GESTURE_MS) L.newStep = true;
+    L.gesture = gesture;
+    L.gestureAt = now;
     Object.assign(L.params, changes);
     if (L.layer >= layerCount()) L.layer = layerCount() - 1;                                  // a layer is gone
     renderControls();
@@ -432,16 +443,33 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       renderControls();
     }
     renderInfo();
+    history();
     if (moved) requestCrop();          // the crop follows the densest courses, and they moved (a region re-solved)
   }
 
-  const save = latest(async () => {
-    const doc = getDoc();
-    if (!doc || !L.params) return;
-    const info = await request('PUT', `/api/doc/${doc.id}/look`, L.params);
-    if (getDoc() && getDoc().id === doc.id) adoptInfo(info);
-  });
-  const saveSoon = debounce(save, 150);
+  // Saves go out one after another, in order. flush() sends what is waiting now (an undo has to come after it) and
+  // resolves when every save is done.
+  let saving = Promise.resolve();
+  let unsaved = false;
+  let saveTimer = 0;
+  function flush() {
+    clearTimeout(saveTimer);
+    saving = saving.then(async () => {
+      const doc = getDoc();
+      if (!unsaved || !doc || !L.params) return;
+      unsaved = false;
+      const merge = !L.newStep;
+      L.newStep = false;
+      const info = await request('PUT', `/api/doc/${doc.id}/look?merge=${+merge}`, L.params);
+      if (getDoc() && getDoc().id === doc.id) adoptInfo(info);
+    }).catch((e) => console.warn(e));
+    return saving;
+  }
+  function saveSoon() {
+    unsaved = true;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, 150);
+  }
 
   // ---------------------------------------------------------------- layout
 
@@ -784,8 +812,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     renderPresetList();
   }
 
-  // Loading replaces the settings, and look changes are not in any undo history: 撤销载入 goes back to what they were
-  // before the first of a run of loads, until some other change is made.
+  // Loading replaces the settings: 撤销载入 goes back to what they were before the first of a run of loads, until some
+  // other change is made (撤销 on the page does the same, one step at a time).
   function applyPreset(name) {
     const p = presetOf(name);
     if (!p || !L.params) return;
@@ -939,9 +967,12 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     if (!getDoc() || getDoc().id !== doc.id) return;
     L.info = info;
     L.params = { ...info.params };
+    L.gesture = null;
+    L.newStep = true;
     if (L.layer >= layerCount()) L.layer = layerCount() - 1;
     renderControls();
     renderInfo();
+    history();
     layout();
     renderFitStatus();
     requestCrop();
@@ -965,17 +996,18 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   // ---------------------------------------------------------------- input
 
   for (const b of document.querySelectorAll('.styles .opt')) b.addEventListener('click', () => setLayer({ style: b.dataset.style }));
-  $('#density').addEventListener('input', (e) => setLayer({ density: +e.target.value }));
-  $('#tilt').addEventListener('input', (e) => setLayer({ tilt: +e.target.value }));
-  $('#strength').addEventListener('input', (e) => setLayer({ strength: +e.target.value, strength_auto: false }));
+  $('#density').addEventListener('input', (e) => setLayer({ density: +e.target.value }, { gesture: `density:${L.layer}` }));
+  $('#tilt').addEventListener('input', (e) => setLayer({ tilt: +e.target.value }, { gesture: `tilt:${L.layer}` }));
+  $('#strength').addEventListener('input', (e) => setLayer({ strength: +e.target.value, strength_auto: false },
+    { gesture: `strength:${L.layer}` }));
   $('#btn-strength-auto').addEventListener('click', () => setLayer({ strength_auto: true }));
   $('#sparkle-depth').addEventListener('input', (e) => setAmount('sparkle_depth', +e.target.value));
   $('#sparkle-bright').addEventListener('input', (e) => setAmount('sparkle_bright', +e.target.value));
-  $('#sparkle-painted').addEventListener('input', (e) => set({ sparkle_painted: +e.target.value }));
-  $('#sparkle-even').addEventListener('input', (e) => set({ sparkle_even: +e.target.value }));
+  $('#sparkle-painted').addEventListener('input', (e) => set({ sparkle_painted: +e.target.value }, { gesture: 'sparkle_painted' }));
+  $('#sparkle-even').addEventListener('input', (e) => set({ sparkle_even: +e.target.value }, { gesture: 'sparkle_even' }));
   $('#moire-on').addEventListener('change', (e) => set({ moire_on: e.target.checked }));
-  $('#moire').addEventListener('input', (e) => set({ moire: +e.target.value }));
-  $('#moire-area').addEventListener('input', (e) => set({ moire_area: +e.target.value }));
+  $('#moire').addEventListener('input', (e) => set({ moire: +e.target.value }, { gesture: 'moire' }));
+  $('#moire-area').addEventListener('input', (e) => set({ moire_area: +e.target.value }, { gesture: 'moire_area' }));
   $('#btn-sparkle-link').addEventListener('click', toggleLink);
   $('#exclude').addEventListener('change', (e) => {
     const doc = getDoc();
@@ -1120,9 +1152,15 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     if (L.active && layout()) { requestCrop(); fitSoon(); }
   }).observe($('#look-stage'));
 
+  // The 纹理 page's undo and redo buttons: the server's latest word on whether there is a step to take or to put back.
+  function history() {
+    if (L.info) onHistory(!!L.info.can_undo_look, !!L.info.can_redo_look);
+  }
+
   return {
     params() { return L.params ? { ...L.params } : null; },
     layer() { return L.layer; },
+    flush,
     enter() {
       L.active = true;
       for (const b of document.querySelectorAll('.seg-btn[data-zoom]')) b.setAttribute('aria-checked', String(+b.dataset.zoom === L.zoom));
@@ -1135,8 +1173,10 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       if (!st || st.id !== L.docId) {
         L.docId = st ? st.id : null;
         L.coverageV = st ? st.coverage_v : null;
+        L.lookRev = st ? st.look_rev : 0;
         Object.assign(L, { params: null, info: null, centre: null, fitImg: null, checkImg: null, cropImg: null,
           beforeReset: null, beforeLoad: null, presetName: null, layer: 0, addOnLoad: false,
+          gesture: null, newStep: true,
           cropCheckImg: null,
           cropRect: null });
         tabsBox.replaceChildren();
@@ -1148,6 +1188,14 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       }
       renderAdd();
       renderExclude();
+      if (st.look_rev !== L.lookRev) {            // undo or redo changed the settings: read them again
+        L.lookRev = st.look_rev;
+        L.beforeReset = null;
+        L.beforeLoad = null;
+        renderReset();
+        renderPresetState();
+        if (L.active) load().catch((e) => flash(e.message, true)); else L.params = null;
+      }
       if (st.coverage_v !== L.coverageV) {        // 颜色排除 toggled (or undone), a mask changed: new coverage
         L.coverageV = st.coverage_v;
         refreshSoon();

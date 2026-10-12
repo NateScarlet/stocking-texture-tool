@@ -203,6 +203,8 @@ Kase's share 0% / 30% / 70% / 100% (the rest is Fine lines; left to right), the 
 
 **Color exclusion** (on by default): parts of a region whose color is far from the stocking's (gold trim, gloves, bare skin) get no texture. Now and then a sheer knee showing skin gets excluded too; turn it off then.
 
+**Undo and redo:** the Undo and Redo buttons at the top right (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) work on the page you are on, and each page keeps its own history. On the Texture page they cover what you do there: style, density, tilt, strength, adding and deleting layers and their mix, sparkles, the moiré effect, loading a preset, Reset all, and the Color exclusion switch; one drag of a slider is one step. Saving, deleting, importing and exporting presets are not part of it. Undo on the Guides page still covers regions and direction lines. The history is not saved with the image and is cleared when you close it.
+
 ### 6. Show problems
 
 Click Show problems above Detail. Red marks where the courses are so dense that the texture was faded to avoid moiré, blue what color exclusion removed, and yellow regions with no direction lines yet. If a main area has a large patch of red, lower the density:

@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import time
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -388,16 +389,17 @@ def remove_wall(doc_id: str, body: PointIn):
 
 
 @app.post('/api/doc/{doc_id}/undo')
-def undo(doc_id: str):
+def undo(doc_id: str, page: Literal['guides', 'look'] = 'guides'):
+    """Take back the last step of the 引导 page's history (guides) or the 纹理 page's (look: its settings and 颜色排除)."""
     d = doc_for(doc_id)
-    d.undo()
+    d.undo(page)
     return state_of(d)
 
 
 @app.post('/api/doc/{doc_id}/redo')
-def redo(doc_id: str):
+def redo(doc_id: str, page: Literal['guides', 'look'] = 'guides'):
     d = doc_for(doc_id)
-    d.redo()
+    d.redo(page)
     return state_of(d)
 
 
@@ -584,6 +586,7 @@ def look_info(d, q):
                 untextured=untextured, solving=solving,
                 check={'faded': faded.sum() / n, 'excluded': excluded.sum() / n, 'nostroke': nostroke.sum() / n},
                 textured=int((s.R > 0).sum()), has_sparkle_layer=d.sparkle is not None, depth=dstate,
+                can_undo_look=st['can_undo_look'], can_redo_look=st['can_redo_look'],
                 blend_auto=blend_auto(), depth_error=depth.service.error or getattr(d, 'depth_error', None))
 
 
@@ -596,10 +599,12 @@ def get_look(doc_id: str, request: Request):
 
 
 @app.put('/api/doc/{doc_id}/look')
-def put_look(doc_id: str, body: dict):
+def put_look(doc_id: str, body: dict, merge: bool = False):
+    """Save the look, as a step of the 纹理 history. merge=1: the change goes on the step the last one made (a drag of
+    a slider is one step). Before any look is saved, the step takes back to what _base_look gives."""
     d = doc_for(doc_id)
     q = look.clean_params(body)
-    d.set_look(q)
+    d.set_look(q, before=look.clean_params(_base_look(d)) if d.look is None else None, merge=merge)
     _want_depth(d, q)
     return look_info(d, q)
 

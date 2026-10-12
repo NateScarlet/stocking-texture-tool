@@ -629,7 +629,9 @@ def test_color_exclusion_can_be_turned_off_and_undone():
         stock, _, stats, v_off = d.coverage()
         assert v_off != v_on and stock[100, 80] and np.array_equal(stock, m) and stats[0]['covered'] == stats[0]['pixels']
         assert d.state()['color_exclude'] is False and d.state()['coverage_v'] == v_off
-        d.undo()
+        assert d.state()['can_undo_look'] and not d.state()['can_undo']          # a step of the 纹理 history, not 引导's
+        assert not d.undo()                                                       # the 引导 history has nothing to take back
+        d.undo('look')
         assert d.coverage()[3] == v_on and not d.coverage()[0][100, 80]
     finally:
         d.close()

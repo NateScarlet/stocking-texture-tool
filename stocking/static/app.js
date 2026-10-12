@@ -46,7 +46,12 @@ const cv = $('#view');
 const ctx = cv.getContext('2d');
 const stage = $('#stage');
 const lookUI = createLook({ getDoc: () => S.doc, getArt: () => S.art, request, edit, flash,
-  focusByKeyboard: () => !focusByPointer, canLook: () => canLook(), goLook: () => setMode('look') });
+  focusByKeyboard: () => !focusByPointer, canLook: () => canLook(), goLook: () => setMode('look'),
+  onHistory: (undo, redo) => {
+    if (!S.doc) return;
+    Object.assign(S.doc, { can_undo_look: undo, can_redo_look: redo });
+    renderHistory();
+  } });
 
 // 纹理 opens once some painted region has a 走向 line: before that there is no texture to look at.
 function canLook(st = S.doc) {
@@ -63,6 +68,7 @@ function setMode(m) {
   const changed = S.mode !== m;
   S.mode = m;
   document.body.dataset.mode = m;
+  renderHistory();
   // 纹理 has a tab for each 纹理层 (look.js adds them): only the one being edited is selected
   for (const b of document.querySelectorAll('.mode')) {
     b.setAttribute('aria-selected', String(b.dataset.mode === m && (m !== 'look' || +b.dataset.layer === lookUI.layer())));
@@ -486,12 +492,24 @@ function regionMeta(r) {
 
 let renaming = null;
 
+// 撤销 and 重做 work on the page shown: 纹理 has a history of its own (its settings and 颜色排除), 引导 has the rest.
+function renderHistory() {
+  const d = S.doc, look = S.mode === 'look';
+  $('#btn-undo').disabled = !d || !(look ? d.can_undo_look : d.can_undo);
+  $('#btn-redo').disabled = !d || !(look ? d.can_redo_look : d.can_redo);
+}
+
+function stepHistory(kind) {
+  if (!S.doc) return;
+  if (S.mode !== 'look') { edit('POST', `/${kind}`); return; }
+  lookUI.flush().then(() => edit('POST', `/${kind}?page=look`));     // a change still on its way goes first
+}
+
 function renderChrome() {
   const d = S.doc;
   document.body.classList.toggle('no-doc', !d);
   $('#empty').hidden = !!d;
-  $('#btn-undo').disabled = !d || !d.can_undo;
-  $('#btn-redo').disabled = !d || !d.can_redo;
+  renderHistory();
   $('.mode[data-mode="edit"]').setAttribute('aria-disabled', String(!d));
   lookTab.setAttribute('aria-disabled', String(!canLook()));
   lookTab.title = canLook() ? t('选样式、调参数，看纹理') : '';
@@ -1488,8 +1506,8 @@ $('.skip').addEventListener('click', (e) => { e.preventDefault(); stage.focus();
 $('#btn-open').addEventListener('click', openDialog);
 $('#btn-open-2').addEventListener('click', openDialog);
 $('#file-input').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) openUpload(f); e.target.value = ''; });
-$('#btn-undo').addEventListener('click', () => edit('POST', '/undo'));
-$('#btn-redo').addEventListener('click', () => edit('POST', '/redo'));
+$('#btn-undo').addEventListener('click', () => stepHistory('undo'));
+$('#btn-redo').addEventListener('click', () => stepHistory('redo'));
 $('#btn-fit').addEventListener('click', fit);
 $('#btn-100').addEventListener('click', () => zoomCentre(1));
 
@@ -1822,8 +1840,8 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.ctrlKey || e.metaKey) {
-    if (k === 'z') { e.preventDefault(); edit('POST', e.shiftKey ? '/redo' : '/undo'); }
-    else if (k === 'y') { e.preventDefault(); edit('POST', '/redo'); }
+    if (k === 'z') { e.preventDefault(); stepHistory(e.shiftKey ? 'redo' : 'undo'); }
+    else if (k === 'y') { e.preventDefault(); stepHistory('redo'); }
     else if (k === 'o') { e.preventDefault(); openDialog(); }
     else if (k === 'e') { e.preventDefault(); exportDoc(); }
     return;
