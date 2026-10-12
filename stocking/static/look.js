@@ -98,7 +98,7 @@ function pct(x) {
 }
 
 const MAX_LAYERS = 4;                                                  // as look.MAX_LAYERS
-const LAYER_KEYS = ['style', 'density', 'tilt', 'strength', 'strength_auto', 'weight'];     // as look.LAYER_KEYS
+const LAYER_KEYS = ['style', 'density', 'tilt', 'strength', 'strength_auto', 'weight', 'amount'];     // as look.LAYER_KEYS
 // the style a new layer starts with: the first of these that no layer has yet
 const NEW_LAYER_STYLES = ['grain', 'lines', 'loops', 'coil', 'knit', 'oily'];
 
@@ -107,10 +107,12 @@ function layerOf(params) {
   return Object.fromEntries(LAYER_KEYS.map((k) => [k, params[k]]));
 }
 
-// Whether two looks hold the same settings. An automatic strength is worked out per image: its number does not count.
+// Whether two looks hold the same settings. An automatic strength is worked out per image: its number does not count,
+// and an amount nobody set is the weight.
 function sameLook(a, b) {
   const same = (x, y) => Object.keys(x).every((k) => k === 'layers'
-    || (k === 'strength' && x.strength_auto && y.strength_auto) || x[k] === y[k]);
+    || (k === 'strength' && x.strength_auto && y.strength_auto)
+    || (k === 'amount' ? (x.amount ?? x.weight) === (y.amount ?? y.weight) : x[k] === y[k]));
   const la = a.layers || [], lb = b.layers || [];
   return same(a, b) && la.length === lb.length && la.every((x, i) => same(x, lb[i]));
 }
@@ -150,7 +152,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   function query(extra) {
     const p = L.params;
     const q = new URLSearchParams({ style: p.style, density: p.density, tilt: p.tilt,
-      strength: p.strength, strength_auto: p.strength_auto, weight: p.weight, layers: JSON.stringify(p.layers || []),
+      strength: p.strength, strength_auto: p.strength_auto, weight: p.weight, amount: p.amount ?? '',
+      layers: JSON.stringify(p.layers || []), lock_total: p.lock_total,
       sparkle_depth: p.sparkle_depth, sparkle_bright: p.sparkle_bright, sparkle_painted: p.sparkle_painted,
       sparkle_even: p.sparkle_even,
       sparkle_link: p.sparkle_link, moire_on: p.moire_on, moire: p.moire, moire_area: p.moire_area });
@@ -160,13 +163,18 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
 
   // ---------------------------------------------------------------- 纹理层
 
-  // Style, density, tilt and strength belong to a layer; sparkles and the moiré effect to the whole look. The layers
-  // are mixed in the ratio of their weights; the panel shows each as a share of the whole (weights are kept adding up
-  // to 100, so a weight is its share).
+  // Style, density, tilt and strength belong to a layer; sparkles and the moiré effect to the whole look. Every layer
+  // has two numbers for how much of it is laid on, and 融合 shows the one that goes with the switch 自动 100%:
+  //  - on (lock_total, the default): its weight, mixed in the ratio of the weights; the panel shows each layer's share
+  //    of the whole, and the weights are kept adding up to 100, so a weight is its share;
+  //  - off: its amount (0..100%), whatever the others have. An amount nobody set (null) is the weight, so the look does
+  //    not jump when the switch is first turned off.
+  // Both are kept while the other is in use: the switch goes back and forth without losing either.
   const layerCount = () => 1 + ((L.params && L.params.layers) || []).length;
   const layerAt = (i) => (i === 0 ? L.params : L.params.layers[i - 1]);
   const allLayers = () => [layerOf(L.params), ...L.params.layers];
   const layerName = (i) => t('纹理 {n}', { n: i + 1 });
+  const amountOf = (l) => l.amount ?? l.weight;
 
   // Each layer's share as a whole percentage; they add up to 100 (the biggest remainders take the odd points).
   function shareList() {
@@ -180,12 +188,20 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     return out;
   }
 
-  // The layers as weights (any scale) put back as a look: weights rescaled to add up to 100.
+  // What 融合 shows for each layer, whole percentages: its share (switch on) or its own amount (off).
+  const levelList = () => (L.params.lock_total ? shareList() : allLayers().map((l) => Math.round(amountOf(l))));
+
+  // The layers put back as a look.
+  function asLook(layers) {
+    const [first, ...rest] = layers;
+    return { ...first, layers: rest };
+  }
+
+  // The same with the weights rescaled to add up to 100.
   function withLayers(layers) {
     const total = layers.reduce((a, l) => a + l.weight, 0);
     const ws = layers.map((l) => (total > 0 ? (100 * l.weight) / total : 100 / layers.length)).map((w) => Math.round(w * 10) / 10);
-    const [first, ...rest] = layers.map((l, i) => ({ ...l, weight: ws[i] }));
-    return { ...first, layers: rest };
+    return asLook(layers.map((l, i) => ({ ...l, weight: ws[i] })));
   }
 
   // A change to the layer shown.
@@ -194,18 +210,25 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     set({ layers: L.params.layers.map((l, j) => (j === L.layer - 1 ? { ...l, ...changes } : l)) }, opts);
   }
 
-  // Moving one share moves the others in proportion, so the shares keep adding up to 100.
-  function setShare(value) {
-    const ws = allLayers().map((l) => l.weight);
-    const total = ws.reduce((a, b) => a + b, 0);
+  // Layer i's slider in 融合. Switch on: moving one share moves the others in proportion, so the shares keep adding up
+  // to 100. Off: it is this layer's own amount and the others stay as they are (the first time, every amount that was
+  // not set yet is fixed where it is).
+  function setLevel(i, value) {
     const v = Math.min(100, Math.max(0, value));
-    const rest = total - ws[L.layer];
-    set(withLayers(allLayers().map((l, i) => ({
-      ...l, weight: i === L.layer ? v : rest > 0 ? (l.weight * (100 - v)) / rest : (100 - v) / (ws.length - 1),
+    const layers = allLayers();
+    if (!L.params.lock_total) {
+      set(asLook(layers.map((l, j) => ({ ...l, amount: j === i ? v : amountOf(l) }))));
+      return;
+    }
+    const total = layers.reduce((a, l) => a + l.weight, 0);
+    const rest = total - layers[i].weight;
+    set(withLayers(layers.map((l, j) => ({
+      ...l, weight: j === i ? v : rest > 0 ? (l.weight * (100 - v)) / rest : (100 - v) / (layers.length - 1),
     }))));
   }
 
-  // A new layer takes an equal share, the others give way evenly; it starts with the defaults, in a style no layer has.
+  // A new layer starts with the defaults, in a style no layer has, and takes an equal share of the weights (the others
+  // give way evenly). With the switch off the others keep their amounts and it comes in at 50%.
   function addLayer() {
     if (!L.params) {                    // the settings are not here yet: enter 纹理 and add it once they are
       L.addOnLoad = true;
@@ -214,22 +237,32 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     }
     const n = layerCount() + 1;
     if (n > MAX_LAYERS) return;
-    const have = new Set(allLayers().map((l) => l.style));
-    const total = allLayers().reduce((a, l) => a + l.weight, 0);
-    const kept = allLayers().map((l) => ({ ...l, weight: total > 0 ? (l.weight * (100 - 100 / n)) / total : (100 - 100 / n) / (n - 1) }));
+    const free = !L.params.lock_total;
+    const layers = allLayers();
+    const have = new Set(layers.map((l) => l.style));
+    const total = layers.reduce((a, l) => a + l.weight, 0);
+    const kept = layers.map((l) => ({
+      ...l, amount: free ? amountOf(l) : l.amount,
+      weight: total > 0 ? (l.weight * (100 - 100 / n)) / total : (100 - 100 / n) / (n - 1),
+    }));
     kept.push({ style: NEW_LAYER_STYLES.find((s) => !have.has(s)) || 'grain', density: 100, tilt: 32,
-      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100 / n });
+      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100 / n, amount: free ? 50 : null });
     L.layer = n - 1;
     set(withLayers(kept));
     goLook();
   }
 
-  function deleteLayer() {
-    if (layerCount() < 2) return;
-    const left = allLayers().filter((_, i) => i !== L.layer);
+  // Deletes layer i (the one shown by default); the layer shown stays the same one, or the next takes the place of
+  // the one deleted. The others give back its weight in proportion; with the switch off they keep their amounts. A
+  // lone layer is the whole look: 100.
+  function deleteLayer(i = L.layer) {
+    if (layerCount() < 2 || i >= layerCount()) return;
+    const free = !L.params.lock_total;
+    const left = allLayers().filter((_, j) => j !== i).map((l) => (free ? { ...l, amount: amountOf(l) } : l));
+    if (left.length === 1) left[0] = { ...left[0], amount: null };
+    if (i < L.layer) L.layer -= 1;
     L.layer = Math.min(L.layer, left.length - 1);
     set(withLayers(left));
-    goLook();
     flash(t('已删除一层纹理'));
   }
 
@@ -239,26 +272,57 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     if (L.params) renderControls();
   }
 
-  // One tab for each layer after the first (the first is the 纹理 tab), and the + beside them.
+  // One tab for each layer after the first (the first is the 纹理 tab), and the + beside them. With more than one
+  // layer every tab carries a × that deletes its layer (as Delete does on a tab with the focus).
   const tabsBox = $('#layer-tabs');
   const addBtn = $('#btn-layer-add');
 
+  function onTab(e) {
+    const i = +e.currentTarget.dataset.layer;
+    if (e.target.closest('.tab-x')) {
+      e.stopImmediatePropagation();     // not a click on the tab: the page must not select it (or 纹理)
+      deleteLayer(i);
+    } else selectLayer(i);
+  }
+
+  function onTabKey(e) {
+    if (e.key === 'Delete' && L.active && layerCount() > 1) {
+      e.preventDefault();
+      deleteLayer(+e.currentTarget.dataset.layer);
+    }
+  }
+
   function renderTabs() {
     const extra = L.params ? layerCount() - 1 : tabsBox.childElementCount;
-    if (tabsBox.childElementCount === extra) return;
-    tabsBox.replaceChildren(...Array.from({ length: extra }, (_, k) => {
-      const b = document.createElement('button');
-      b.className = 'mode';
-      b.dataset.mode = 'look';
-      b.dataset.layer = String(k + 1);
-      b.setAttribute('role', 'tab');
-      b.setAttribute('aria-controls', 'pane-look');
-      b.setAttribute('aria-selected', 'false');
-      b.textContent = layerName(k + 1);
-      b.addEventListener('click', () => selectLayer(k + 1));
-      return b;
-    }));
-    if (L.active) goLook();             // the tabs just made are marked by the page
+    if (tabsBox.childElementCount !== extra) {
+      tabsBox.replaceChildren(...Array.from({ length: extra }, (_, k) => {
+        const b = document.createElement('button');
+        b.className = 'mode';
+        b.dataset.mode = 'look';
+        b.dataset.layer = String(k + 1);
+        b.setAttribute('role', 'tab');
+        b.setAttribute('aria-controls', 'pane-look');
+        b.setAttribute('aria-selected', 'false');
+        b.textContent = layerName(k + 1);
+        b.addEventListener('click', onTab);
+        b.addEventListener('keydown', onTabKey);
+        return b;
+      }));
+      if (L.active) goLook();           // the tabs just made are marked by the page
+    }
+    const many = !!L.params && layerCount() > 1;
+    for (const tab of document.querySelectorAll('.mode[data-mode="look"]')) {
+      const x = tab.querySelector('.tab-x');
+      if (many && !x) {
+        const mark = document.createElement('span');
+        mark.className = 'tab-x';
+        mark.title = t('删除这层纹理');
+        mark.setAttribute('aria-hidden', 'true');       // the tab names itself; Delete on the tab is the keyboard's way
+        mark.textContent = '×';
+        tab.append(mark);
+      } else if (!many && x) x.remove();
+      if (many) tab.setAttribute('aria-keyshortcuts', 'Delete'); else tab.removeAttribute('aria-keyshortcuts');
+    }
   }
 
   function renderAdd() {
@@ -267,10 +331,61 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     addBtn.title = full ? t('最多 {n} 层纹理', { n: MAX_LAYERS }) : t('加一层纹理，和现在的纹理按比例叠在一起（试验）');
   }
 
-  $('#tab-look').addEventListener('click', () => selectLayer(0));
+  $('#tab-look').addEventListener('click', onTab);
+  $('#tab-look').addEventListener('keydown', onTabKey);
   addBtn.addEventListener('click', addLayer);
-  $('#btn-layer-delete').addEventListener('click', deleteLayer);
-  $('#layer-share').addEventListener('input', (e) => setShare(+e.target.value));
+
+  // 融合: a row for each layer, the slider and the name that shows the layer (built when the number of layers changes,
+  // so a slider being dragged is never replaced); 自动 100% beside the title is the switch.
+  const blendRows = $('#blend-rows');
+  const blendAuto = $('#blend-auto');
+
+  function renderBlend() {
+    const lock = !!L.params.lock_total, levels = levelList();
+    if (blendRows.childElementCount !== levels.length) {
+      blendRows.replaceChildren(...levels.map((_, i) => {
+        const row = document.createElement('div');
+        row.className = 'blend-row';
+        row.dataset.layer = String(i);
+        const name = document.createElement('button');
+        name.className = 'blend-name';
+        name.type = 'button';
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = '100';
+        slider.step = '1';
+        const val = document.createElement('span');
+        val.className = 'val num';
+        row.append(name, slider, val);
+        return row;
+      }));
+    }
+    levels.forEach((level, i) => {
+      const row = blendRows.children[i];
+      const [name, slider, val] = row.children;
+      row.classList.toggle('on', i === L.layer);
+      name.textContent = layerName(i);
+      name.setAttribute('aria-current', String(i === L.layer));
+      slider.setAttribute('aria-label', layerName(i));
+      slider.value = level;
+      setVal(val, level, '%');
+    });
+    blendAuto.setAttribute('aria-pressed', String(lock));
+    const total = $('#blend-total');
+    total.hidden = lock;
+    total.textContent = t('合计 {n}%', { n: levels.reduce((a, b) => a + b, 0) });
+  }
+
+  blendRows.addEventListener('input', (e) => {
+    const row = e.target.closest('.blend-row');
+    if (row && e.target.type === 'range') setLevel(+row.dataset.layer, +e.target.value);
+  });
+  blendRows.addEventListener('click', (e) => {
+    const row = e.target.closest('.blend-row');
+    if (row && e.target.closest('.blend-name')) selectLayer(+row.dataset.layer);
+  });
+  blendAuto.addEventListener('click', () => set({ lock_total: !L.params.lock_total }));
 
   // With 关联 on, depth and brightness always hold the same amount: moving either moves both to that value.
   function setAmount(key, value) {
@@ -509,14 +624,9 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     renderAdd();
     const p = layerAt(L.layer);          // style, density, tilt and strength: the layer shown
     const many = layerCount() > 1;
-    $('#layer-section').hidden = !many;
-    if (many) {
-      const shares = shareList(), share = shares[L.layer];
-      $('#layer-title').textContent = layerName(L.layer);
-      $('#layer-share').value = share;
-      setVal($('#layer-share-val'), share, '%');
-      $('#layer-ratio').textContent = shares.map((s, i) => `${layerName(i)} ${s}%`).join(' · ');
-    }
+    $('#blend-section').hidden = !many;
+    if (many) renderBlend();
+    $('#style-layer').textContent = many ? `· ${layerName(L.layer)}` : '';
     for (const b of document.querySelectorAll('.styles .opt')) b.setAttribute('aria-checked', String(b.dataset.style === p.style));
     $('#style-note').textContent = STYLE_NOTES[p.style];
     $('#density').value = p.density;
@@ -884,7 +994,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     const before = { ...L.params };
     const layer = !!(L.info && L.info.has_sparkle_layer);       // a painted 亮点 layer is the default when there is one
     set({ style: 'knit', density: 100, tilt: 32,
-      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100, layers: [],
+      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100, amount: null, layers: [],
+      lock_total: true,
       sparkle_depth: layer ? 0 : 100,
       sparkle_bright: layer ? 0 : 100, sparkle_painted: layer ? 100 : 0, sparkle_even: 0, sparkle_link: true,
       moire_on: false, moire: 100, moire_area: 100 });
@@ -992,6 +1103,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
           cropCheckImg: null,
           cropRect: null });
         tabsBox.replaceChildren();
+        renderTabs();
         renderPresetState();
         renderAdd();
         if (L.active && st) load().catch((e) => flash(e.message, true));

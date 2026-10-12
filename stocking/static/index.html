@@ -107,21 +107,23 @@
     <p class="sub preset-note"><span id="preset-note"></span> <button id="btn-preset-undo" class="text-btn small" type="button" hidden></button></p>
   </section>
 
-  <section class="group" id="layer-section" hidden>
-    <div class="group-head">
-      <h2 id="layer-title"></h2>
-      <button id="btn-layer-delete" class="text-btn small layer-delete" type="button">删除这层</button>
+  <section class="group" id="blend-section" hidden>
+    <div class="group-head blend-head">
+      <h2>融合</h2>
+      <button class="info-btn" aria-expanded="false" aria-controls="blend-info" aria-label="融合说明">?</button>
+      <button id="blend-auto" class="btn small toggle" type="button" aria-pressed="true"
+              data-tip="开：各层加起来固定 100%，拖一层，其他层按比例让出。关：每层各调各的，互不影响；加起来超过 100% 纹理更重，不到 100% 会露出原图。开和关各自记着自己的设置。">自动 100%</button>
     </div>
-    <div class="field">
-      <div class="field-head"><label for="layer-share">占比</label><span id="layer-share-val" class="val num"></span></div>
-      <input id="layer-share" type="range" min="0" max="100" step="1" value="100">
-      <p id="layer-ratio" class="sub"></p>
+    <div id="blend-info" class="info-pop" role="note" hidden>
+      <p>每一层都按同一套走向线画，再叠在一起。亮点和摩尔纹效果在叠好之后加，对所有层都一样。</p>
+      <p>点层的名字，下面的样式、密度、斜度和强度就切到那一层。</p>
     </div>
-    <p class="note">每一层都按同一套走向线画，再按占比叠在一起。亮点和摩尔纹效果在叠好之后加，对所有层都一样。</p>
+    <div id="blend-rows"></div>
+    <p id="blend-total" class="sub" hidden></p>
   </section>
 
   <section class="group">
-    <h2>样式</h2>
+    <h2>样式<span id="style-layer" class="style-layer"></span></h2>
     <div class="styles" role="radiogroup" aria-label="样式">
       <button class="opt" data-style="knit" role="radio">细线</button>
       <button class="opt" data-style="loops" role="radio">针织</button>

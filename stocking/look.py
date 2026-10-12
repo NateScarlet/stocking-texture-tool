@@ -17,8 +17,10 @@ cannot alias either.
 纹理层 (试验): the look can hold several layers, each with its own style, density, tilt, strength and a weight; all of
 them follow the same solved guides. The first layer is the look's own keys, the others are `layers`. Every layer is
 rendered as a whole (the picture with that layer's texture on it) and the renders are mixed pixel by pixel in the
-ratio of the weights, so the mix is the picture plus each texture in its share. The 亮点 and the 摩尔纹效果 go on
-afterwards, once, over the mix; the sparkles take the recipe of the first layer drawn.
+ratio of the weights, so the mix is the picture plus each texture in its share. With the total unlocked (lock_total off)
+each layer is laid on by its own amount instead, a percentage whatever the others have: the picture plus each texture at
+its own amount, so the amounts may add up to more than 100% (heavier) or less (the picture shows through). The 亮点
+and the 摩尔纹效果 go on afterwards, once, over the mix; the sparkles take the recipe of the first layer drawn.
 """
 import json
 import re
@@ -50,10 +52,12 @@ SPARKLE_KINDS = ('depth', 'bright', 'painted', 'even')
 DEFAULTS = {'style': 'knit', 'density': 100.0, 'tilt': 32.0, 'strength': 100.0,
             'strength_auto': True, 'sparkle_depth': 100.0, 'sparkle_bright': 100.0, 'sparkle_painted': 0.0,
             'sparkle_even': 0.0, 'sparkle_link': True, 'moire_on': False, 'moire': 100.0, 'moire_area': 100.0,
-            'weight': 100.0, 'layers': []}
-# What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. weight is its share of
-# the mix, relative to the other layers' (0 = not drawn); the layers are mixed in the ratio of their weights.
-LAYER_KEYS = ('style', 'density', 'tilt', 'strength', 'strength_auto', 'weight')
+            'weight': 100.0, 'amount': None, 'layers': [], 'lock_total': True}
+# What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. lock_total (the
+# default) holds the total at 100%: the layers are mixed in the ratio of their weights (0 = not drawn). Without it each
+# layer is laid on by its own amount, a percentage whatever the others have; an amount not set yet (None) is the
+# weight. Both are kept, so the switch can go back and forth without losing either.
+LAYER_KEYS = ('style', 'density', 'tilt', 'strength', 'strength_auto', 'weight', 'amount')
 MAX_LAYERS = 4              # the first layer and up to three more: every layer is a whole render
 # Mean lightness step per unit of texture ratio (see suggested_strength) over the dark fixture's stockings, where the
 # presets were tuned: 100% strength reads right at this value.
@@ -93,7 +97,7 @@ MOIRE_SHARP = 2.2
 MOIRE_LIGHT = 0.13
 MOIRE_TEXTURE = 0.9
 RENDER_KEYS = ('style', 'density', 'tilt', 'strength', 'sparkle_depth', 'sparkle_bright',
-               'sparkle_painted', 'sparkle_even', 'moire_on', 'moire', 'moire_area', 'weight', 'layers')
+               'sparkle_painted', 'sparkle_even', 'moire_on', 'moire', 'moire_area', 'weight', 'layers', 'lock_total')
 MARGIN = 8                  # px around a crop, so blurs and gradients at its edge see real neighbours
 
 
@@ -126,6 +130,7 @@ def _clean_layer(p):
     q['tilt'] = float(np.clip(float(q['tilt']), 0, 75))
     q['strength'] = float(np.clip(float(q['strength']), 0, 250))
     q['weight'] = float(np.clip(float(q['weight']), 0, 100))
+    q['amount'] = None if q['amount'] in (None, '', 'null') else float(np.clip(float(q['amount']), 0, 100))
     q['strength_auto'] = _flag(q['strength_auto'])
     if p.get('strength_auto') is None and 'strength' in p:
         q['strength_auto'] = q['strength'] == 100.0     # settings from before auto strength: a moved slider stays put
@@ -159,7 +164,7 @@ def clean_params(p):
     q['moire_area'] = float(np.clip(float(q['moire_area']), 0, 100))
     for k in SPARKLE_KINDS:
         q[f'sparkle_{k}'] = float(np.clip(float(q[f'sparkle_{k}']), 0, 300))
-    for k in ('sparkle_link', 'moire_on'):
+    for k in ('sparkle_link', 'moire_on', 'lock_total'):
         q[k] = _flag(q[k])
     if q['sparkle_link']:
         q['sparkle_bright'] = q['sparkle_depth']        # linked amounts are one value; depth's wins
@@ -172,9 +177,17 @@ def layer_list(q):
 
 
 def drawn_layers(q):
-    """[(layer, share)] of the layers that show, the shares adding up to 1. A layer with no weight draws nothing; with
-    every weight at 0 the first layer is drawn alone."""
+    """[(layer, share)] of the layers that show; a layer with nothing to lay on draws nothing. A look with one layer is
+    that layer whole, whatever its weight or amount. With several and the total locked (lock_total) the shares are the
+    weights relative to each other and add up to 1 (every weight at 0: the first layer alone); unlocked, a share is the
+    layer's own amount (the weight where none is set) as a fraction, they may add up to anything, and with every amount
+    at 0 nothing is drawn."""
     layers = layer_list(q)
+    if len(layers) == 1:
+        return [(layers[0], 1.0)]
+    if not q['lock_total']:
+        amounts = [(layer, layer['weight'] if layer['amount'] is None else layer['amount']) for layer in layers]
+        return [(layer, amount / 100.0) for layer, amount in amounts if amount > 0]
     shown = [layer for layer in layers if layer['weight'] > 0]
     if not shown:
         return [(layers[0], 1.0)]
@@ -182,12 +195,16 @@ def drawn_layers(q):
     return [(layer, layer['weight'] / total) for layer in shown]
 
 
-def blend_layers(renders, shares):
+def blend_layers(renders, shares, picture=None):
     """The layers' renders (BGR uint8, each the picture with that layer's texture) mixed in the ratio of shares, which
-    add up to 1. Where no layer draws, every render is the picture and so is the mix."""
+    add up to 1. Where no layer draws, every render is the picture and so is the mix. With `picture` given the shares
+    may add up to anything: the picture takes what the layers leave of 1 (negative above it, so the textures are
+    laid on at their own amounts)."""
     acc = np.zeros(renders[0].shape, np.float32)
     for img, share in zip(renders, shares):
         acc += img.astype(np.float32) * np.float32(share)
+    if picture is not None:
+        acc += picture.astype(np.float32) * np.float32(1.0 - sum(shares))
     return np.clip(np.round(acc), 0, 255).astype(np.uint8)
 
 
@@ -699,7 +716,8 @@ class Scene:
         q = clean_params(params)
         vx, vy, ax, ay, same = self._gradients()
         fade = np.zeros(same.shape, np.float32)
-        for layer, share in drawn_layers(q):
+        drawn = drawn_layers(q)
+        for layer, share in drawn:
             p = geometry(layer['density'], self.w, self.h)
             f_lo, f_hi, period = p['f_lo'], p['f_hi'], p['period']
             if layer['style'] == 'lines':
@@ -709,6 +727,9 @@ class Scene:
             else:
                 fx, fy = vx / period, vy / period
             fade += share * (knit.sstep(f_lo, f_hi, np.hypot(fx, fy)).astype(np.float32) * same)
+        total = sum(share for _, share in drawn)
+        if total > 0:
+            fade /= np.float32(total)       # a share of the texture there is: 1 where the total is locked
         n = int(same.sum())
         return (float((fade > 0.5).sum() / n) if n else 0.0), fade
 
@@ -765,10 +786,16 @@ class Scene:
         sl = (slice(Y0, Y1), slice(X0, X1))
         src, R, V, A, alpha = self.src[sl], self.R[sl], self.V[sl], self.A[sl], self.alpha[sl]
         drawn = drawn_layers(q)
-        style = drawn[0][0]['style']
+        style = (drawn[0][0] if drawn else layer_list(q)[0])['style']
         weight, ready = self.sparkle_weight(q, style, sl)
         renders = [self._draw_layer(layer, sl, src, R, V, A, alpha) for layer, _ in drawn]
-        out = renders[0] if len(renders) == 1 else blend_layers(renders, [share for _, share in drawn])
+        shares = [share for _, share in drawn]
+        if not renders:
+            out = src.copy()                        # every layer at 0: no texture
+        elif len(renders) == 1 and shares[0] == 1.0:
+            out = renders[0]
+        else:
+            out = blend_layers(renders, shares, None if q['lock_total'] else src)
         moire_ready = True
         if moire_active(q):
             fringes = self.moire_map(q['moire_area'] / 100.0)

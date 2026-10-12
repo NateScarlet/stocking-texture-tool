@@ -791,7 +791,8 @@ def _single(s, **kw):
 def test_a_look_is_one_layer_until_layers_are_added():
     q = look.clean_params({})
     assert q['weight'] == 100 and q['layers'] == []
-    assert look.layer_list(q) == [dict(style='knit', density=100, tilt=32, strength=100, strength_auto=True, weight=100)]
+    assert look.layer_list(q) == [dict(style='knit', density=100, tilt=32, strength=100, strength_auto=True, weight=100,
+                                       amount=None)]
     assert look.drawn_layers(q) == [(look.layer_list(q)[0], 1.0)]
     q['layers'].append('changed')
     assert look.clean_params({})['layers'] == [] and look.DEFAULTS['layers'] == []        # defaults are never shared
@@ -932,3 +933,103 @@ def test_the_fade_of_layers_is_each_layers_own_in_its_share():
     assert np.array_equal(s.fade(dict(style='knit', weight=10))[1], knit_only)             # alone, weight does not matter
     faded, _ = s.check(dict(style='knit', weight=25, layers=[{'style': 'lines', 'tilt': 75, 'weight': 75}]))
     assert np.array_equal(faded, mix > 0.5)
+
+
+# ---------------------------------------------------------------- 纹理层 with the total unlocked
+
+def test_the_total_is_locked_at_100_until_it_is_unlocked():
+    assert look.DEFAULTS['lock_total'] is True and look.clean_params({})['lock_total'] is True
+    assert [look.clean_params({'lock_total': v})['lock_total'] for v in (False, 'false', '0', 'true', '1', True)] == [
+        False, False, False, True, True, True]                                    # from a query string, too
+    assert 'lock_total' in look.RENDER_KEYS
+    two = lambda **kw: look.clean_params(dict({'weight': 30, 'layers': [{'weight': 70}, {'weight': 50}]}, **kw))
+    assert [round(share, 3) for _, share in look.drawn_layers(two())] == [0.2, 0.467, 0.333]       # relative: add up to 1
+    assert [share for _, share in look.drawn_layers(two(lock_total=False))] == [0.3, 0.7, 0.5]     # each its own
+    assert look.drawn_layers(look.clean_params({'weight': 20, 'lock_total': False}))[0][1] == 1.0   # a lone layer is whole
+    assert look.drawn_layers(look.clean_params({'weight': 0, 'layers': [{'weight': 0}], 'lock_total': False})) == []
+
+
+def test_unlocked_amounts_that_add_up_to_100_are_the_locked_mix():
+    s, _, _ = _dome()
+    layers = [{'style': 'grain', 'weight': 70}]
+    locked = s.render(dict(OFF, style='knit', weight=30, layers=layers))[0]
+    assert np.array_equal(s.render(dict(OFF, style='knit', weight=30, layers=layers, lock_total=False))[0], locked)
+
+
+def test_unlocked_each_layer_is_laid_on_at_its_own_amount():
+    s, _, _ = _dome()
+    a, b = _single(s, style='knit'), _single(s, style='grain')
+    src = s.src.astype(float)
+    for wa, wb in [(60, 80), (40, 30), (100, 100), (50, 0)]:
+        out = s.render(dict(OFF, style='knit', weight=wa, lock_total=False, layers=[{'style': 'grain', 'weight': wb}]))[0]
+        want = np.clip(np.round(src + wa / 100 * (a - src) + wb / 100 * (b - src)), 0, 255)
+        assert np.abs(out.astype(float) - want).max() <= 1, (wa, wb)
+        assert np.array_equal(out[s.R == 0], s.src[s.R == 0])                     # off the stockings: the picture
+    heavy = s.render(dict(OFF, style='knit', weight=100, lock_total=False, layers=[{'style': 'grain', 'weight': 100}]))[0]
+    texture = lambda im: np.abs(im.astype(float) - src)[s.R > 0].mean()
+    assert texture(heavy) > 1.2 * max(texture(a), texture(b))                     # 200%: more texture than either alone
+    thin = s.render(dict(OFF, style='knit', weight=30, lock_total=False, layers=[{'style': 'grain', 'weight': 20}]))[0]
+    assert texture(thin) < 0.5 * min(texture(a), texture(b))                      # 50%: the picture shows through
+
+
+def test_unlocked_one_layers_amount_does_not_move_the_others():
+    s, _, _ = _dome()
+    a, b = _single(s, style='knit'), _single(s, style='grain')
+    only = s.render(dict(OFF, style='knit', weight=50, lock_total=False, layers=[{'style': 'grain', 'weight': 0}]))[0]
+    both = s.render(dict(OFF, style='knit', weight=50, lock_total=False, layers=[{'style': 'grain', 'weight': 40}]))[0]
+    assert np.abs(only.astype(float) - (s.src + 0.5 * (a.astype(float) - s.src))).max() <= 1
+    gain = both.astype(float) - only.astype(float)
+    assert np.abs(gain - 0.4 * (b.astype(float) - s.src)).max() <= 1.5            # the second layer's own 40%, no more
+    nothing = s.render(dict(OFF, style='knit', weight=0, lock_total=False, layers=[{'style': 'grain', 'weight': 0}]))[0]
+    assert np.array_equal(nothing, s.src)                                         # every amount at 0: no texture
+
+
+@pytest.mark.parametrize('style', ['knit', 'lines', 'oily'])
+def test_an_unlocked_crop_is_the_same_area_of_the_whole(style):
+    s, _, _ = _dome()
+    p = dict(OFF, style=style, weight=90, lock_total=False, layers=[{'style': 'grain', 'weight': 80, 'density': 80},
+                                                                   {'style': 'coil', 'weight': 20}],
+             sparkle_even=60, moire_on=True, moire=70)
+    whole, info = s.render(p)
+    assert info['moire_ready']
+    for rect in [(100, 150, 300, 400), (0, 0, 64, 64), (330, 540, 400, 600)]:
+        x0, y0, x1, y1 = rect
+        assert np.array_equal(s.render(p, rect)[0], whole[y0:y1, x0:x1]), rect
+
+
+def test_the_unlocked_fade_is_a_share_of_the_texture_there_is():
+    s = _flat((120, 100, 104), h=300, w=300, freq=2.0)
+    knit_only = s.fade(dict(style='knit'))[1]
+    half = s.fade(dict(style='knit', weight=50, lock_total=False, layers=[{'style': 'lines', 'tilt': 75, 'weight': 0}]))[1]
+    assert np.allclose(half, knit_only, atol=1e-6)                                # half the texture, faded as much
+    assert not s.fade(dict(weight=0, lock_total=False, layers=[{'weight': 0}]))[1].any()      # no texture, nothing faded
+
+
+def test_a_layers_amount_is_cleaned_and_is_none_until_it_is_set():
+    q = look.clean_params({'amount': 140, 'layers': [{'amount': '35'}, {'amount': ''}, {'amount': 'null'}, {'amount': -4},
+                                                      {'amount': None}]})
+    assert q['amount'] == 100 and [layer['amount'] for layer in q['layers']] == [35, None, None]       # at most 3 extra
+    assert look.clean_params({})['amount'] is None and look.DEFAULTS['amount'] is None
+    assert look.clean_params({'layers': json.dumps([{'amount': 20}, {}])})['layers'][1]['amount'] is None
+    with pytest.raises(ValueError):
+        look.clean_params({'amount': 'a lot'})
+
+
+def test_the_switch_remembers_both_settings_a_layer_has_a_weight_and_an_amount():
+    """Locked, the weights are the ratio and the amounts are ignored; unlocked, the amounts are laid on and the
+    weights are ignored. Only the switch differs between the two renders, so going back and forth loses nothing."""
+    s, _, _ = _dome()
+    a, b = _single(s, style='knit'), _single(s, style='grain')
+    both = dict(OFF, style='knit', weight=30, amount=90, layers=[{'style': 'grain', 'weight': 70, 'amount': 100}])
+    locked = s.render(dict(both, lock_total=True))[0]
+    free = s.render(dict(both, lock_total=False))[0]
+    assert np.array_equal(locked, look.blend_layers([a, b], [0.3, 0.7]))
+    assert np.array_equal(free, look.blend_layers([a, b], [0.9, 1.0], s.src))
+    assert not np.array_equal(locked, free)
+    # what is set for the other state does not show
+    other = dict(both, weight=80, layers=[{'style': 'grain', 'weight': 20, 'amount': 100}])
+    assert np.array_equal(s.render(dict(other, lock_total=False))[0], free)
+    other = dict(both, amount=10, layers=[{'style': 'grain', 'weight': 70, 'amount': 20}])
+    assert np.array_equal(s.render(dict(other, lock_total=True))[0], locked)
+    assert [share for _, share in look.drawn_layers(look.clean_params(dict(both, lock_total=False)))] == [0.9, 1.0]
+    assert [share for _, share in look.drawn_layers(look.clean_params(dict(both, amount=0, lock_total=False)))] == [1.0]
