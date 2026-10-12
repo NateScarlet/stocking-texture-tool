@@ -500,6 +500,7 @@ def mirror_region(doc_id: str, rid: int, body: MergeIn):
 _scene = (None, None)               # (render key, Scene) of the open document's current state
 _scene_lock = threading.Lock()
 CROP_MAX = 1024                     # px per side of a live 100% crop; bigger panes would lag behind the sliders
+BLEND_AUTO_KEY = 'blend_auto'       # the user's last choice for Auto 100% (settings.json)
 
 
 def scene_for(d):
@@ -512,12 +513,19 @@ def scene_for(d):
 
 
 def _base_look(d):
-    """The document's saved look; before any is saved, a PSD with a painted 亮点 layer places sparkles by it."""
+    """The document's saved look. Before any is saved a look starts from what the user chose last for Auto 100%, and a
+    PSD with a painted 亮点 layer places sparkles by it."""
     if d.look is not None:
         return dict(d.look)
+    base = {'lock_total': blend_auto()}
     if d.sparkle is not None:
-        return {'sparkle_depth': 0.0, 'sparkle_bright': 0.0, 'sparkle_painted': 100.0}
-    return {}
+        base.update(sparkle_depth=0.0, sparkle_bright=0.0, sparkle_painted=100.0)
+    return base
+
+
+def blend_auto():
+    """Whether Auto 100% (look.lock_total) was last left on; it is, until the user turns it off."""
+    return settings.get(BLEND_AUTO_KEY, True) is not False
 
 
 def _params(request: Request, d):
@@ -576,7 +584,7 @@ def look_info(d, q):
                 untextured=untextured, solving=solving,
                 check={'faded': faded.sum() / n, 'excluded': excluded.sum() / n, 'nostroke': nostroke.sum() / n},
                 textured=int((s.R > 0).sum()), has_sparkle_layer=d.sparkle is not None, depth=dstate,
-                depth_error=depth.service.error or getattr(d, 'depth_error', None))
+                blend_auto=blend_auto(), depth_error=depth.service.error or getattr(d, 'depth_error', None))
 
 
 @app.get('/api/doc/{doc_id}/look')
@@ -594,6 +602,17 @@ def put_look(doc_id: str, body: dict):
     d.set_look(q)
     _want_depth(d, q)
     return look_info(d, q)
+
+
+class BlendAutoIn(BaseModel):
+    on: bool
+
+
+@app.put('/api/look/blend-auto')
+def put_blend_auto(body: BlendAutoIn):
+    """Remember the user's last choice for Auto 100% (per user, not per image): new looks start from it."""
+    settings.update(**{BLEND_AUTO_KEY: body.on})
+    return {'blend_auto': body.on}
 
 
 class PresetIn(BaseModel):

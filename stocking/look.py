@@ -55,9 +55,10 @@ DEFAULTS = {'style': 'knit', 'density': 100.0, 'tilt': 32.0, 'strength': 100.0,
             'weight': 100.0, 'amount': None, 'layers': [], 'lock_total': True}
 # What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. lock_total (the
 # default) holds the total at 100%: the layers are mixed in the ratio of their weights (0 = not drawn). Without it each
-# layer is laid on by its own amount, a percentage whatever the others have; an amount not set yet (None) is the
-# weight. Both are kept, so the switch can go back and forth without losing either.
+# layer is laid on by its own amount, a percentage whatever the others have; an amount not set yet (None) is
+# DEFAULT_AMOUNT, whatever the weight is. Both are kept, so the switch can go back and forth without losing either.
 LAYER_KEYS = ('style', 'density', 'tilt', 'strength', 'strength_auto', 'weight', 'amount')
+DEFAULT_AMOUNT = 50.0       # every layer starts at 50% when the total is unlocked, in whatever order it came about
 MAX_LAYERS = 4              # the first layer and up to three more: every layer is a whole render
 # Mean lightness step per unit of texture ratio (see suggested_strength) over the dark fixture's stockings, where the
 # presets were tuned: 100% strength reads right at this value.
@@ -180,13 +181,13 @@ def drawn_layers(q):
     """[(layer, share)] of the layers that show; a layer with nothing to lay on draws nothing. A look with one layer is
     that layer whole, whatever its weight or amount. With several and the total locked (lock_total) the shares are the
     weights relative to each other and add up to 1 (every weight at 0: the first layer alone); unlocked, a share is the
-    layer's own amount (the weight where none is set) as a fraction, they may add up to anything, and with every amount
-    at 0 nothing is drawn."""
+    layer's own amount (DEFAULT_AMOUNT where none is set) as a fraction, they may add up to anything, and with every
+    amount at 0 nothing is drawn."""
     layers = layer_list(q)
     if len(layers) == 1:
         return [(layers[0], 1.0)]
     if not q['lock_total']:
-        amounts = [(layer, layer['weight'] if layer['amount'] is None else layer['amount']) for layer in layers]
+        amounts = [(layer, DEFAULT_AMOUNT if layer['amount'] is None else layer['amount']) for layer in layers]
         return [(layer, amount / 100.0) for layer, amount in amounts if amount > 0]
     shown = [layer for layer in layers if layer['weight'] > 0]
     if not shown:

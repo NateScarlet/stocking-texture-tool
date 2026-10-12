@@ -135,3 +135,23 @@ def test_the_api_answers_a_bad_request_with_a_message():
     r = c.request('DELETE', '/api/look/presets', json={'name': '没有这个'})
     assert r.status_code == 400 and '没有这个' in r.json()['detail']
     assert c.get('/api/look/presets').json() == {'presets': []}
+
+
+def test_the_last_choice_for_auto_100_is_remembered_and_a_new_look_starts_from_it():
+    import types
+    c = TestClient(server.app)
+    new = types.SimpleNamespace(look=None, sparkle=None)
+    assert server.blend_auto() is True and server._base_look(new)['lock_total'] is True      # on until turned off
+    r = c.put('/api/look/blend-auto', json={'on': False})
+    assert r.status_code == 200 and r.json() == {'blend_auto': False}
+    assert server.blend_auto() is False and settings.get(server.BLEND_AUTO_KEY) is False
+    assert look.clean_params(server._base_look(new))['lock_total'] is False                  # a new look starts off
+    painted = types.SimpleNamespace(look=None, sparkle=object())
+    assert server._base_look(painted)['lock_total'] is False and server._base_look(painted)['sparkle_painted'] == 100.0
+    kept = types.SimpleNamespace(look=look.clean_params({'lock_total': True}), sparkle=None)
+    assert server._base_look(kept)['lock_total'] is True                                     # an image keeps its own
+    assert c.put('/api/look/blend-auto', json={'on': True}).status_code == 200
+    assert server._base_look(new)['lock_total'] is True
+    assert c.put('/api/look/blend-auto', json={'on': 'maybe'}).status_code == 422
+    settings.update(**{server.BLEND_AUTO_KEY: 'garbage'})
+    assert server.blend_auto() is True                                                       # only an explicit off counts

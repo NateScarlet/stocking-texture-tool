@@ -98,6 +98,7 @@ function pct(x) {
 }
 
 const MAX_LAYERS = 4;                                                  // as look.MAX_LAYERS
+const DEFAULT_AMOUNT = 50;                                             // as look.DEFAULT_AMOUNT
 const LAYER_KEYS = ['style', 'density', 'tilt', 'strength', 'strength_auto', 'weight', 'amount'];     // as look.LAYER_KEYS
 // the style a new layer starts with: the first of these that no layer has yet
 const NEW_LAYER_STYLES = ['grain', 'lines', 'loops', 'coil', 'knit', 'oily'];
@@ -112,7 +113,7 @@ function layerOf(params) {
 function sameLook(a, b) {
   const same = (x, y) => Object.keys(x).every((k) => k === 'layers'
     || (k === 'strength' && x.strength_auto && y.strength_auto)
-    || (k === 'amount' ? (x.amount ?? x.weight) === (y.amount ?? y.weight) : x[k] === y[k]));
+    || (k === 'amount' ? (x.amount ?? DEFAULT_AMOUNT) === (y.amount ?? DEFAULT_AMOUNT) : x[k] === y[k]));
   const la = a.layers || [], lb = b.layers || [];
   return same(a, b) && la.length === lb.length && la.every((x, i) => same(x, lb[i]));
 }
@@ -166,15 +167,16 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   // Style, density, tilt and strength belong to a layer; sparkles and the moiré effect to the whole look. Every layer
   // has two numbers for how much of it is laid on, and 融合 shows the one that goes with the switch 自动 100%:
   //  - on (lock_total, the default): its weight, mixed in the ratio of the weights; the panel shows each layer's share
-  //    of the whole, and the weights are kept adding up to 100, so a weight is its share;
-  //  - off: its amount (0..100%), whatever the others have. An amount nobody set (null) is the weight, so the look does
-  //    not jump when the switch is first turned off.
+  //    of the whole, and the weights are kept adding up to 100, so a weight is its share. A new layer takes an equal
+  //    share;
+  //  - off: its amount (0..100%), whatever the others have. An amount nobody set (null) is 50%, whatever the weight
+  //    is, so the layers look the same however they came about.
   // Both are kept while the other is in use: the switch goes back and forth without losing either.
   const layerCount = () => 1 + ((L.params && L.params.layers) || []).length;
   const layerAt = (i) => (i === 0 ? L.params : L.params.layers[i - 1]);
   const allLayers = () => [layerOf(L.params), ...L.params.layers];
   const layerName = (i) => t('纹理 {n}', { n: i + 1 });
-  const amountOf = (l) => l.amount ?? l.weight;
+  const amountOf = (l) => l.amount ?? DEFAULT_AMOUNT;
 
   // Each layer's share as a whole percentage; they add up to 100 (the biggest remainders take the odd points).
   function shareList() {
@@ -204,22 +206,21 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     return asLook(layers.map((l, i) => ({ ...l, weight: ws[i] })));
   }
 
-  // A change to the layer shown.
-  function setLayer(changes, opts) {
-    if (L.layer === 0) { set(changes, opts); return; }
-    set({ layers: L.params.layers.map((l, j) => (j === L.layer - 1 ? { ...l, ...changes } : l)) }, opts);
+  // A change to layer i.
+  function setLayerAt(i, changes, opts) {
+    if (i === 0) { set(changes, opts); return; }
+    set({ layers: L.params.layers.map((l, j) => (j === i - 1 ? { ...l, ...changes } : l)) }, opts);
   }
 
+  // A change to the layer shown.
+  const setLayer = (changes, opts) => setLayerAt(L.layer, changes, opts);
+
   // Layer i's slider in 融合. Switch on: moving one share moves the others in proportion, so the shares keep adding up
-  // to 100. Off: it is this layer's own amount and the others stay as they are (the first time, every amount that was
-  // not set yet is fixed where it is).
+  // to 100. Off: it is this layer's own amount and nothing else moves.
   function setLevel(i, value) {
     const v = Math.min(100, Math.max(0, value));
+    if (!L.params.lock_total) { setLayerAt(i, { amount: v }); return; }
     const layers = allLayers();
-    if (!L.params.lock_total) {
-      set(asLook(layers.map((l, j) => ({ ...l, amount: j === i ? v : amountOf(l) }))));
-      return;
-    }
     const total = layers.reduce((a, l) => a + l.weight, 0);
     const rest = total - layers[i].weight;
     set(withLayers(layers.map((l, j) => ({
@@ -228,7 +229,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   }
 
   // A new layer starts with the defaults, in a style no layer has, and takes an equal share of the weights (the others
-  // give way evenly). With the switch off the others keep their amounts and it comes in at 50%.
+  // give way evenly); its amount is not set, so 50% like every layer's.
   function addLayer() {
     if (!L.params) {                    // the settings are not here yet: enter 纹理 and add it once they are
       L.addOnLoad = true;
@@ -237,28 +238,25 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     }
     const n = layerCount() + 1;
     if (n > MAX_LAYERS) return;
-    const free = !L.params.lock_total;
     const layers = allLayers();
     const have = new Set(layers.map((l) => l.style));
     const total = layers.reduce((a, l) => a + l.weight, 0);
     const kept = layers.map((l) => ({
-      ...l, amount: free ? amountOf(l) : l.amount,
-      weight: total > 0 ? (l.weight * (100 - 100 / n)) / total : (100 - 100 / n) / (n - 1),
+      ...l, weight: total > 0 ? (l.weight * (100 - 100 / n)) / total : (100 - 100 / n) / (n - 1),
     }));
     kept.push({ style: NEW_LAYER_STYLES.find((s) => !have.has(s)) || 'grain', density: 100, tilt: 32,
-      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100 / n, amount: free ? 50 : null });
+      strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100 / n, amount: null });
     L.layer = n - 1;
     set(withLayers(kept));
     goLook();
   }
 
   // Deletes layer i (the one shown by default); the layer shown stays the same one, or the next takes the place of
-  // the one deleted. The others give back its weight in proportion; with the switch off they keep their amounts. A
-  // lone layer is the whole look: 100.
+  // the one deleted. The others give back its weight in proportion and keep their amounts. A lone layer is the whole
+  // look: 100, and no amount.
   function deleteLayer(i = L.layer) {
     if (layerCount() < 2 || i >= layerCount()) return;
-    const free = !L.params.lock_total;
-    const left = allLayers().filter((_, j) => j !== i).map((l) => (free ? { ...l, amount: amountOf(l) } : l));
+    const left = allLayers().filter((_, j) => j !== i);
     if (left.length === 1) left[0] = { ...left[0], amount: null };
     if (i < L.layer) L.layer -= 1;
     L.layer = Math.min(L.layer, left.length - 1);
@@ -385,7 +383,13 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     const row = e.target.closest('.blend-row');
     if (row && e.target.closest('.blend-name')) selectLayer(+row.dataset.layer);
   });
-  blendAuto.addEventListener('click', () => set({ lock_total: !L.params.lock_total }));
+  // The user's last choice for the switch is kept (per user, the server's settings): a look not saved yet starts from it.
+  blendAuto.addEventListener('click', () => {
+    const on = !L.params.lock_total;
+    set({ lock_total: on });
+    if (L.info) L.info.blend_auto = on;
+    request('PUT', '/api/look/blend-auto', { on }).catch((e) => flash(e.message, true));
+  });
 
   // With 关联 on, depth and brightness always hold the same amount: moving either moves both to that value.
   function setAmount(key, value) {
@@ -995,7 +999,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     const layer = !!(L.info && L.info.has_sparkle_layer);       // a painted 亮点 layer is the default when there is one
     set({ style: 'knit', density: 100, tilt: 32,
       strength: L.info ? L.info.strength_suggested : 100, strength_auto: true, weight: 100, amount: null, layers: [],
-      lock_total: true,
+      lock_total: L.info ? L.info.blend_auto : true,         // what a new look starts with: the user's last choice
       sparkle_depth: layer ? 0 : 100,
       sparkle_bright: layer ? 0 : 100, sparkle_painted: layer ? 100 : 0, sparkle_even: 0, sparkle_link: true,
       moire_on: false, moire: 100, moire_area: 100 });
