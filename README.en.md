@@ -20,7 +20,7 @@ Black or white stockings alike (original on the left, processed on the right):
 - **One click selects a leg.** Pick uses Segment Anything, with a Small / Medium / Large range to choose from after each click.
 - **Six styles:** Fine lines, Knit, Coil, Slanted lines, Kase and Glossy (Beta). Each can add sparkles where the yarn catches the light.
 - **Texture layers (Beta):** lay up to four textures over each other by percentage, say Fine lines 30% and Kase 70%, all on the same direction lines.
-- **Presets:** save a tuned style, density, tilt, strength, texture layers, sparkles and moiré effect, and load them in one click on another image.
+- **Presets:** save a tuned style, density, tilt, strength, texture layers, sparkles and moiré effect, and load them in one click on another image, or export them as a small file to give to someone.
 - **Black or white stockings.** Strength follows the stockings' lightness: the same texture stands out about twice as much on white, so it is turned down there automatically.
 - **No moiré.** Where the courses get close to a pixel apart the texture fades out by itself, and Show problems marks where that happens.
 - **A beta switch for when you do want moiré.** The rippling bands of light and dark that real stockings show worn in layers or photographed: turn on the Moiré effect switch, then use Strength for how strong the bands are and Area for how far they grow from one small ring. Off by default; the bands follow the bulges of the knees and thighs and leave the flat parts alone.
@@ -198,6 +198,8 @@ Kase's share 0% / 30% / 70% / 100% (the rest is Fine lines; left to right), the 
 ![Fine lines and Kase mixed in different ratios: from left to right Fine lines, Fine lines 70% with Kase 30%, Fine lines 30% with Kase 70%, Kase](docs/images/layers-mix.png)
 
 **Presets** (top of the panel): save a tuned style, density, tilt, strength, texture layers, sparkles and moiré effect, and load them in one click on other images. Pick one in the list to load it; after tweaking, Save writes the current settings into the selected preset. To make a new one, pick “Save as new preset…” at the bottom of the list and give it a name (Save does the same when no preset is selected); Delete removes the selected one. Presets are kept on this computer, not with the image; if Strength is on Auto, it is set again from this image's stockings when you load. Loading replaces the current settings; click Undo load to go back. Regions and direction lines belong to each image and are not part of a preset.
+
+**Exporting and importing presets:** to give a tuned preset to someone, select it and click Export… beside the heading to save it as a small file (`.json`); they click Import…, pick the file, and it shows up in their presets. An imported preset whose name is already taken gets a number after it (say “Black (2)”) and never replaces one they already have. The file holds only the settings (style, density, tilt, strength, texture layers, sparkles and moiré effect), no picture and no direction lines.
 
 **Color exclusion** (on by default): parts of a region whose color is far from the stocking's (gold trim, gloves, bare skin) get no texture. Now and then a sheer knee showing skin gets excluded too; turn it off then.
 

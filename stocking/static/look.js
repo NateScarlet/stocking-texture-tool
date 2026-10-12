@@ -142,6 +142,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     drag: null,
     presets: [],           // the saved presets, as the server lists them: [{ name, params }], params null if unreadable
     presetName: null,      // the preset these settings were loaded from or saved as; null for none
+    presetFileBusy: false, // a preset file's dialog is open (导出 / 导入)
     beforeLoad: null,      // { params, name } before the preset(s) just loaded: what 撤销载入 goes back to
   };
   const fitCv = $('#fit');
@@ -764,6 +765,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     save.disabled = !L.params || (!!p && !!p.params && !modified);
     save.title = p ? t('用现在的设置更新“{name}”', { name: p.name }) : t('把现在的设置存成新预设');
     $('#btn-preset-delete').disabled = !p;
+    $('#btn-preset-export').disabled = !p || !p.params || L.presetFileBusy;       // an unreadable preset cannot be handed on
+    $('#btn-preset-import').disabled = L.presetFileBusy;
     const notes = [];
     if (p && !p.params) notes.push(t('这个预设读不了（可能是新版本存的），可以删掉它。'));
     else if (modified) notes.push(t('已改动（和“{name}”不同）。', { name: p.name }));
@@ -883,6 +886,34 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
     flash(t('已删除预设“{name}”', { name }));
   }
 
+  // 导出 / 导入: a preset as a small file, to hand to someone else. Both ask in the system's dialog (on the server, as
+  // opening and exporting an image do); a name that is already taken is not replaced, the import gets a number.
+  async function presetFile(go) {
+    if (L.presetFileBusy) return;
+    L.presetFileBusy = true;
+    renderPresetState();
+    try { await go(); } catch (e) { flash(e.message, true); } finally {
+      L.presetFileBusy = false;
+      renderPresetState();
+    }
+  }
+
+  const exportPreset = () => presetFile(async () => {
+    const name = L.presetName;
+    if (!presetOf(name)) return;
+    const res = await request('POST', '/api/look/presets/export', { name });
+    if (!res.cancelled) flash(t('已导出预设“{name}”：{file}', { name, file: res.file }));
+  });
+
+  const importPreset = () => presetFile(async () => {
+    const res = await request('POST', '/api/look/presets/import');
+    if (res.cancelled) return;
+    L.presets = res.presets;
+    renderPresetList();
+    flash(res.renamed ? t('已导入预设“{name}”（已有同名预设，没有覆盖）', { name: res.imported })
+      : t('已导入预设“{name}”', { name: res.imported }));
+  });
+
   presetSel.addEventListener('change', () => {
     if (presetSel.selectedOptions[0].dataset.new) {
       renderPresetState();                       // the list shows the selected preset again while the name is asked
@@ -892,6 +923,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   });
   $('#btn-preset-save').addEventListener('click', () => (presetOf(L.presetName) ? updatePreset() : openSavePreset()));
   $('#btn-preset-delete').addEventListener('click', deletePreset);
+  $('#btn-preset-export').addEventListener('click', exportPreset);
+  $('#btn-preset-import').addEventListener('click', importPreset);
   $('#btn-preset-undo').addEventListener('click', undoPreset);
   presetNameInput.addEventListener('input', renderPresetDialog);
   $('#btn-preset-cancel').addEventListener('click', () => presetDlg.close());

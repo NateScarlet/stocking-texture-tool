@@ -636,6 +636,75 @@ def delete_preset(body: NameIn):
     return {'presets': presets.delete(body.name)}
 
 
+def preset_folder():
+    """The folder the preset save and open dialogs start in: where a preset file last went or came from, else where the
+    last export went."""
+    return settings.get('preset_dir') or settings.get('export_dir') or settings.get('last_dir') or os.path.expanduser('~')
+
+
+def _ask_preset_save(suggested):
+    import tkinter as tk
+    from tkinter import filedialog
+    with _dialog_lock:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        try:
+            # asks before replacing a file that is already there
+            p = filedialog.asksaveasfilename(parent=root, title=tr('导出预设'), initialdir=os.path.dirname(suggested),
+                                             initialfile=os.path.basename(suggested), defaultextension=presets.EXT,
+                                             filetypes=[(tr('预设文件'), f'*{presets.EXT}')])
+        finally:
+            root.destroy()
+    return os.path.normpath(p) if p else None
+
+
+def _ask_preset_open():
+    import tkinter as tk
+    from tkinter import filedialog
+    with _dialog_lock:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        try:
+            p = filedialog.askopenfilename(parent=root, title=tr('导入预设'), initialdir=preset_folder(),
+                                           filetypes=[(tr('预设文件'), f'*{presets.EXT}'), (tr('所有文件'), '*.*')])
+        finally:
+            root.destroy()
+    return os.path.normpath(p) if p else None
+
+
+@app.post('/api/look/presets/export')
+def export_preset(body: NameIn):
+    """Save one preset as a small file in the place the user names in the system's save dialog, for handing to someone
+    else. Returns {'file'} or {'cancelled'}."""
+    text = presets.file_text(body.name)
+    p = _ask_preset_save(os.path.join(preset_folder(), presets.file_name(body.name)))
+    if not p:
+        return {'cancelled': True}
+    if not os.path.isdir(os.path.dirname(p)):
+        raise ValueError(tr('文件夹不存在：{folder}', folder=os.path.dirname(p)))
+    def write(tmp):
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+
+    export._replace(p, write)
+    settings.update(preset_dir=os.path.dirname(p))
+    return {'file': p}
+
+
+@app.post('/api/look/presets/import')
+def import_preset():
+    """Add the preset in a file the user picks in the system's open dialog. Never replaces one: a taken name gets a number
+    after it. Returns {'presets', 'imported' (the name it went in under), 'renamed'} or {'cancelled'}."""
+    p = _ask_preset_open()
+    if not p:
+        return {'cancelled': True}
+    listing, name, renamed = presets.import_file(p)
+    settings.update(preset_dir=os.path.dirname(p))
+    return {'presets': listing, 'imported': name, 'renamed': renamed}
+
+
 @app.get('/api/doc/{doc_id}/render/crop')
 def render_crop(doc_id: str, request: Request, x0: int, y0: int, w: int, h: int):
     d = doc_for(doc_id)

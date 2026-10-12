@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 
 import pytest
@@ -155,3 +156,161 @@ def test_the_last_choice_for_auto_100_is_remembered_and_a_new_look_starts_from_i
     assert c.put('/api/look/blend-auto', json={'on': 'maybe'}).status_code == 422
     settings.update(**{server.BLEND_AUTO_KEY: 'garbage'})
     assert server.blend_auto() is True                                                       # only an explicit off counts
+
+
+# ---------------------------------------------------------------- preset files
+
+TWO_LAYERS = {'style': 'knit', 'weight': 30, 'strength': 45, 'strength_auto': True, 'sparkle_even': 40,
+              'layers': [{'style': 'grain', 'weight': 70, 'amount': 80}], 'lock_total': False}
+
+
+def write_file(path, data):
+    text = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return str(path)
+
+
+def test_a_preset_file_holds_the_format_the_version_the_name_and_the_settings(tmp_path):
+    presets.save('细线加颗粒', TWO_LAYERS)
+    data = json.loads(presets.file_text('细线加颗粒'))
+    assert (data['format'], data['version'], data['name']) == (presets.FORMAT, presets.VERSION, '细线加颗粒')
+    assert data['params'] == presets.listing()[0]['params'] and data['params']['layers'][0]['style'] == 'grain'
+    assert data['params']['strength'] == look.DEFAULTS['strength']              # an automatic strength is stored as the default
+    assert presets.file_text('细线加颗粒').endswith('\n') and '细线加颗粒' in presets.file_text('细线加颗粒')   # readable, not \u escapes
+    with pytest.raises(ValueError, match='没有叫'):
+        presets.file_text('没有这个')
+    settings.update(**{presets.KEY: {'新版': dict(look.clean_params({}), style='later-style')}})
+    with pytest.raises(ValueError, match='读不了'):
+        presets.file_text('新版')
+
+
+def test_the_file_name_is_the_preset_name_made_safe_for_windows():
+    assert presets.file_name('黑丝·细线') == '黑丝·细线.json'
+    assert presets.file_name('a/b:c*d?e"f<g>h|i\\j') == 'a_b_c_d_e_f_g_h_i_j.json'
+    assert presets.file_name('  ..  ') == 'preset.json' and presets.file_name('') == 'preset.json'
+
+
+def test_an_exported_preset_imports_back_with_everything_it_had(tmp_path):
+    presets.save('甲', TWO_LAYERS)
+    f = write_file(tmp_path / 'a.json', presets.file_text('甲'))
+    presets.delete('甲')
+    listing, name, renamed = presets.import_file(f)
+    assert (name, renamed) == ('甲', False) and [p['name'] for p in listing] == ['甲']
+    assert listing[0]['params'] == presets.snapshot(TWO_LAYERS)                  # layers, amounts and the switch too
+
+
+def test_an_import_never_replaces_a_preset_a_taken_name_gets_a_number(tmp_path):
+    presets.save('甲', {'style': 'loops'})
+    f = write_file(tmp_path / 'a.json', {'format': presets.FORMAT, 'version': 1, 'name': '甲', 'params': {'style': 'coil'}})
+    _, name, renamed = presets.import_file(f)
+    assert (name, renamed) == ('甲 (2)', True)
+    _, name, _ = presets.import_file(f)
+    assert name == '甲 (3)'
+    got = {p['name']: p['params']['style'] for p in presets.listing()}
+    assert got == {'甲': 'loops', '甲 (2)': 'coil', '甲 (3)': 'coil'}              # the first one is as it was
+    long = 'x' * presets.MAX_NAME
+    presets.save(long, {})
+    f = write_file(tmp_path / 'b.json', {'format': presets.FORMAT, 'version': 1, 'name': long, 'params': {}})
+    _, name, _ = presets.import_file(f)
+    assert name == 'x' * (presets.MAX_NAME - 4) + ' (2)' and len(name) == presets.MAX_NAME      # cut to leave room
+
+
+def test_a_preset_file_without_a_usable_name_takes_its_file_name_and_a_long_name_is_cut(tmp_path):
+    ok = {'format': presets.FORMAT, 'version': 1, 'params': {}}
+    _, name, _ = presets.import_file(write_file(tmp_path / '朋友的预设.json', ok))
+    assert name == '朋友的预设'
+    _, name, _ = presets.import_file(write_file(tmp_path / 'c.json', dict(ok, name='a\nb')))
+    assert name == 'c'
+    _, name, _ = presets.import_file(write_file(tmp_path / 'd.json', dict(ok, name='长' * 60)))
+    assert name == '长' * presets.MAX_NAME
+    bom = tmp_path / 'e.json'
+    bom.write_bytes(b'\xef\xbb\xbf' + json.dumps(dict(ok, name='带BOM')).encode('utf-8'))      # saved by a Windows editor
+    assert presets.import_file(str(bom))[1] == '带BOM'
+
+
+@pytest.mark.parametrize('content, why', [
+    ('not json at all', '这不是预设文件'),
+    ('[1, 2, 3]', '这不是预设文件'),
+    ({'format': 'something-else', 'version': 1, 'params': {}}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'version': 1}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'version': 1, 'params': [1]}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'params': {}}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'version': 'one', 'params': {}}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'version': 0, 'params': {}}, '这不是预设文件'),
+    ({'format': presets.FORMAT, 'version': presets.VERSION + 1, 'params': {}}, '新版本'),
+    ({'format': presets.FORMAT, 'version': 1, 'params': {'style': 'no-such-style'}}, '未知样式'),
+    ({'format': presets.FORMAT, 'version': 1, 'params': {'layers': [{'style': 'nope'}]}}, '未知样式'),
+])
+def test_a_file_that_is_not_a_good_preset_is_refused_with_a_reason_and_nothing_is_added(tmp_path, content, why):
+    f = write_file(tmp_path / 'x.json', content)
+    with pytest.raises(ValueError, match=why):
+        presets.import_file(f)
+    assert presets.listing() == []
+
+
+def test_a_file_that_is_missing_or_far_too_big_or_not_text_is_refused(tmp_path):
+    with pytest.raises(ValueError, match='读不了'):
+        presets.import_file(str(tmp_path / 'nope.json'))
+    big = write_file(tmp_path / 'big.json', ' ' * (presets.MAX_FILE + 1))
+    with pytest.raises(ValueError, match='这不是预设文件'):
+        presets.import_file(big)
+    binary = tmp_path / 'b.json'
+    binary.write_bytes(b'\xff\xfe\x00\x01')
+    with pytest.raises(ValueError, match='读不了'):
+        presets.import_file(str(binary))
+    assert presets.listing() == []
+
+
+def test_the_api_exports_a_preset_to_the_file_the_dialog_names_and_remembers_the_folder(monkeypatch, tmp_path):
+    out = tmp_path / '分享'
+    out.mkdir()
+    offered = []
+    answers = []
+
+    def ask(suggested):
+        offered.append(suggested)
+        return answers.pop(0)
+
+    monkeypatch.setattr(server, '_ask_preset_save', ask)
+    c = TestClient(server.app)
+    presets.save('黑丝·细线', TWO_LAYERS)
+    answers.append(None)
+    assert c.post('/api/look/presets/export', json={'name': '黑丝·细线'}).json() == {'cancelled': True}
+    assert offered[-1].endswith('黑丝·细线.json') and not list(out.iterdir())
+    answers.append(str(out / '给朋友.json'))
+    r = c.post('/api/look/presets/export', json={'name': '黑丝·细线'})
+    assert r.status_code == 200 and r.json() == {'file': str(out / '给朋友.json')}
+    assert json.loads((out / '给朋友.json').read_text(encoding='utf-8'))['name'] == '黑丝·细线'
+    assert [p.name for p in out.iterdir()] == ['给朋友.json']                         # no half-written leftovers
+    assert settings.get('preset_dir') == str(out)
+    answers.append(None)
+    c.post('/api/look/presets/export', json={'name': '黑丝·细线'})
+    assert os.path.dirname(offered[-1]) == str(out)                                    # the next dialog opens there
+    r = c.post('/api/look/presets/export', json={'name': '没有这个'})
+    assert r.status_code == 400 and '没有叫' in r.json()['detail']
+    answers.append(str(tmp_path / 'no' / 'such' / 'folder' / 'a.json'))
+    r = c.post('/api/look/presets/export', json={'name': '黑丝·细线'})
+    assert r.status_code == 400 and '文件夹不存在' in r.json()['detail']
+
+
+def test_the_api_imports_the_file_the_dialog_picks_and_never_replaces_a_preset(monkeypatch, tmp_path):
+    presets.save('朋友的', {'style': 'loops'})
+    f = write_file(tmp_path / 'p.json', {'format': presets.FORMAT, 'version': 1, 'name': '朋友的', 'params': TWO_LAYERS})
+    answers = []
+    monkeypatch.setattr(server, '_ask_preset_open', lambda: answers.pop(0))
+    c = TestClient(server.app)
+    answers.append(None)
+    assert c.post('/api/look/presets/import').json() == {'cancelled': True}
+    answers.append(f)
+    r = c.post('/api/look/presets/import')
+    body = r.json()
+    assert r.status_code == 200 and body['imported'] == '朋友的 (2)' and body['renamed'] is True
+    assert [p['name'] for p in body['presets']] == ['朋友的', '朋友的 (2)']
+    assert body['presets'][0]['params']['style'] == 'loops'                              # still as it was
+    assert body['presets'][1]['params']['layers'][0]['style'] == 'grain'
+    assert settings.get('preset_dir') == str(tmp_path)
+    answers.append(write_file(tmp_path / 'bad.json', '{"format": "other"}'))
+    r = c.post('/api/look/presets/import')
+    assert r.status_code == 400 and '这不是预设文件' in r.json()['detail']
+    assert len(c.get('/api/look/presets').json()['presets']) == 2

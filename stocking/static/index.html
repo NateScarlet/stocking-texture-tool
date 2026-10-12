@@ -98,7 +98,11 @@
 
  <div class="side-pane look-only" id="pane-look" role="tabpanel" aria-labelledby="tab-look">
   <section class="group" id="preset-section">
-    <h2 id="preset-title">预设</h2>
+    <div class="group-head preset-head">
+      <h2 id="preset-title">预设</h2>
+      <button id="btn-preset-import" class="text-btn small" type="button" title="读入别人发来的预设文件；重名的不会被覆盖，会加个序号">导入…</button>
+      <button id="btn-preset-export" class="text-btn small" type="button" title="把选中的预设存成一个小文件，发给别人用" disabled>导出…</button>
+    </div>
     <div class="preset-row">
       <select id="preset-select" aria-labelledby="preset-title"></select>
       <button id="btn-preset-save" class="btn small" type="button">保存</button>

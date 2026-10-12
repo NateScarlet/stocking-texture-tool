@@ -377,6 +377,8 @@ body[data-mode="edit"] .look-only, body[data-mode="look"] .edit-only { display: 
 .preset-row select:hover:not(:disabled) { background: var(--hover); }
 .preset-row select:disabled { color: var(--faint); cursor: default; }
 .preset-note { overflow-wrap: anywhere; }
+.preset-head #btn-preset-import { margin-left: auto; }
+.preset-head .text-btn:disabled { color: var(--faint); text-decoration: none; cursor: default; }
 /* 融合: one slider for each 纹理层, the layer shown in bold; 自动 100% on the right of the title */
 .blend-head { height: 26px; }
 .blend-head .btn { margin-left: auto; }
