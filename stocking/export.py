@@ -125,11 +125,8 @@ def export(doc, scene, params, path, kind='png'):
             regions = {r.name: r.mask.copy() for r in doc.regions}
             colors = {r.name: r.color for r in doc.regions}
             sparkle = doc.sparkle
-            # the 纹理 settings go along, so the file brings them back; nothing to carry while they are all default
-            settings = ({'look': doc.look, 'color_exclude': doc.color_exclude}
-                        if doc.look is not None or not doc.color_exclude else None)
         strokes, dividers = doc.stroke_alpha(), doc.divider_alpha()
-        _replace(path, lambda p: psd_io.write_guides(p, doc.art, regions, strokes, colors, sparkle, dividers, settings))
+        _replace(path, lambda p: psd_io.write_guides(p, doc.art, regions, strokes, colors, sparkle, dividers))
     else:
         out_bgr, info = scene.render(params)
         ready = info['sparkles_ready']

@@ -221,9 +221,7 @@ Click Export image at the top right. The arrow beside it switches to the other t
 | --- | --- | --- |
 | Finished image | `name-finished.png` | Use as is |
 | Stockings only | `name-stockings-only.png` | The stockings alone, everything else transparent. Laid over the original it gives the finished image: one layer in Photoshop whose opacity or mask you can still change |
-| Guides | `name-stocking-guides.psd` | Regions, direction lines and divider lines, plus the Texture page's settings (style, density, texture layers, sparkles, moiré effect, Color exclusion); drop it on the tool later to keep working |
-
-The texture settings are written into the file's metadata, not as a layer, so the layers you see in Photoshop are the same as before. They are the settings at the moment of export: if you change them on the Texture page afterwards, export again to write them in. An image whose settings were never changed has none in the file.
+| Guides | `name-stocking-guides.psd` | Regions, direction lines and divider lines; drop it on the tool later to keep working |
 
 The tool saves your work as you go: close it and it opens where you left off. Before opening another picture, it reminds you to export the guides if the current ones aren't saved anywhere.
 

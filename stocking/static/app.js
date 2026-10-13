@@ -1305,7 +1305,7 @@ const EXPORTS = {
     done: t('已导出成品图到 {folder}'), needsLook: true },
   cutout: { label: t('仅丝袜'), desc: t('PNG，只有丝袜，其他地方透明'), main: t('导出仅丝袜'), doing: t('正在导出仅丝袜…'),
     done: t('已导出仅丝袜到 {folder}'), needsLook: true },
-  guides: { label: t('丝袜引导.psd'), desc: t('部位、走向线和纹理设置，可以再打开接着改'), main: t('导出丝袜引导.psd'),
+  guides: { label: t('丝袜引导.psd'), desc: t('部位和走向线，可以再打开接着改'), main: t('导出丝袜引导.psd'),
     doing: t('正在导出丝袜引导.psd…'), done: t('已导出丝袜引导.psd到 {folder}'), needsLook: false },
 };
 let exportKind = 'png';
@@ -1342,7 +1342,6 @@ async function exportDoc(kind = exportKind, { remember = true } = {}) {
     busy(null);
     if (!to || to.cancelled) return false;
     busy(EXPORTS[kind].doing);
-    await lookUI.flush();                        // a change on its way (the guides PSD carries the settings) goes first
     const body = { kind, path: to.path };
     if (EXPORTS[kind].needsLook) body.params = lookUI.params();
     const res = await request('POST', `/api/doc/${id}/export`, body);

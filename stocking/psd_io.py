@@ -2,26 +2,17 @@
 
 Round trips are checked in tests/test_export.py and tests/test_coverage_sam.py.
 
-read_guide_layers(path) -> {art, regions, strokes, sparkle, dividers, settings}: everything a guides PSD holds
+read_guide_layers(path) -> {art, regions, strokes, sparkle, dividers}: everything a guides PSD holds
 read_guides(path)        -> art (HxWx3 RGB uint8), regions {name: bool mask}, strokes (HxW uint8 alpha) or None,
                             sparkle (HxW uint8 alpha) or None
 write_guides(...)        -> the guides in the same format, so they reopen in the tool or Photoshop
 write_texture_psd(...)   -> a separate PSD holding the texture as a group the user drags into their document
-
-The 纹理 settings (look settings, 颜色排除) travel in the file's XMP metadata, not in a layer: a property `settings`
-in the namespace SETTINGS_NS holding JSON. The picture stays what Photoshop shows, and Photoshop keeps XMP it does not
-know. What is read back is checked only for its shape here; the caller checks the settings themselves.
 """
-import json
-from xml.parsers import expat
-from xml.sax.saxutils import escape
-
 import numpy as np
 from PIL import Image
 from psd_tools import PSDImage
 from psd_tools.api.layers import Group, PixelLayer
-from psd_tools.constants import BlendMode, Resource
-from psd_tools.psd.image_resources import ImageResource
+from psd_tools.constants import BlendMode
 
 from .i18n import both, tr
 
@@ -33,78 +24,6 @@ SPARKLE_LAYER = '亮点'
 DIVIDER_LAYER = '隔开'      # the user's 隔开 lines (not in the original fixture format; read back by trace.py)
 TEXTURE_MARK = '丝袜纹理'   # any layer whose name contains this is a previous result; leave it out of the art
 ART_LAYER = '原图'
-
-SETTINGS_NS = 'https://github.com/silvermoong/stocking-texture-tool/ns/1.0/'
-SETTINGS_PROPERTY = 'settings'
-SETTINGS_FORMAT = 'stocking-texture-tool'      # the mark in the JSON
-SETTINGS_VERSION = 1                           # what a file written now says; a higher number is from a newer version
-MAX_XMP = 1024 * 1024                          # bytes: the settings are about 1 KB; anything this big is not ours to parse
-
-
-def _xmp_packet(settings):
-    """The XMP packet (bytes) holding `settings` (a JSON-able dict) under the format mark and version."""
-    body = {'format': SETTINGS_FORMAT, 'version': SETTINGS_VERSION, **settings}
-    text = escape(json.dumps(body, ensure_ascii=False, separators=(',', ':')))
-    return ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
-            '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
-            ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
-            f'  <rdf:Description rdf:about="" xmlns:stocking="{SETTINGS_NS}">\n'
-            f'   <stocking:{SETTINGS_PROPERTY}>{text}</stocking:{SETTINGS_PROPERTY}>\n'
-            '  </rdf:Description>\n'
-            ' </rdf:RDF>\n'
-            '</x:xmpmeta>\n'
-            '<?xpacket end="w"?>').encode('utf-8')
-
-
-def _no_doctype(*_):
-    raise ValueError('a DOCTYPE in XMP')
-
-
-def _xmp_property(data):
-    """The text of our property in an XMP packet (bytes), whether it is an element or an attribute (Photoshop writes
-    simple properties as attributes); None if it is not there. A DOCTYPE is refused: there are no entities to expand."""
-    key = f'{SETTINGS_NS} {SETTINGS_PROPERTY}'
-    found, text = [], None
-    parser = expat.ParserCreate(namespace_separator=' ')
-    parser.StartDoctypeDeclHandler = _no_doctype
-
-    def start(name, attrs):
-        nonlocal text
-        if key in attrs:
-            found.append(attrs[key])
-        if name == key:
-            text = []
-
-    def chars(s):
-        if text is not None:
-            text.append(s)
-
-    def end(name):
-        nonlocal text
-        if name == key and text is not None:
-            found.append(''.join(text))
-            text = None
-
-    parser.StartElementHandler, parser.CharacterDataHandler, parser.EndElementHandler = start, chars, end
-    parser.Parse(data, True)
-    return next((f for f in found if f), None)
-
-
-def read_settings(psd):
-    """The settings dict the XMP of an open PSDImage carries, or None: no XMP, not ours, damaged, or from a newer
-    version."""
-    try:
-        data = psd.image_resources.get_data(Resource.XMP_METADATA)
-        if not isinstance(data, bytes) or not data or len(data) > MAX_XMP:
-            return None
-        raw = _xmp_property(data)
-        found = json.loads(raw) if raw else None
-        if (isinstance(found, dict) and found.get('format') == SETTINGS_FORMAT
-                and type(found.get('version')) is int and found['version'] <= SETTINGS_VERSION):
-            return found
-    except Exception:
-        pass                                                         # whatever is in there, the guides still open
-    return None
 
 
 def _alpha(layer, size):
@@ -125,8 +44,7 @@ def _alpha(layer, size):
 
 
 def read_guide_layers(path):
-    """Everything a guides PSD holds: {'art', 'regions', 'strokes', 'sparkle', 'dividers'} (alphas or None) and
-    'settings' (the dict written by write_guides, or None)."""
+    """Everything a guides PSD holds: {'art', 'regions', 'strokes', 'sparkle', 'dividers'} (alphas or None)."""
     psd = PSDImage.open(path)
     size = psd.size
     groups, strokes_n, sparkle_n, divider_n = both(GUIDE_GROUP), both(STROKE_LAYER), both(SPARKLE_LAYER), both(DIVIDER_LAYER)
@@ -149,7 +67,7 @@ def read_guide_layers(path):
             else:
                 regions[L.name] = a > 0                   # coverage: the layer's display opacity is irrelevant
     return {'art': np.asarray(art.convert('RGB')), 'regions': regions, 'strokes': strokes, 'sparkle': sparkle,
-            'dividers': dividers, 'settings': read_settings(psd)}
+            'dividers': dividers}
 
 
 def read_guides(path):
@@ -175,15 +93,13 @@ def split_factor(src_rgb, out_rgb, eps=1.0):
     return mul, dodge
 
 
-def write_guides(path, art_rgb, regions, stroke_alpha, colors=None, sparkle_alpha=None, divider_alpha=None,
-                 settings=None):
+def write_guides(path, art_rgb, regions, stroke_alpha, colors=None, sparkle_alpha=None, divider_alpha=None):
     """The guides in the fixture's format, so they reopen in the tool (read_guide_layers) or Photoshop.
 
     Layout: the art as a plain layer, then a group 丝袜引导 holding one layer per region (its colour at opacity 115,
     masked by the region), a 走向 layer (red, masked by the stroke alpha), and when given a 亮点 layer (white,
     masked by the painted sparkle alpha) and a 隔开 layer (cyan, masked by the 隔开 lines). regions:
-    {name: HxW bool}; colors: {name: '#rrggbb'}. settings: a JSON-able dict of the 纹理 settings to carry in the
-    file's XMP (read back by read_guide_layers), or None for none.
+    {name: HxW bool}; colors: {name: '#rrggbb'}.
     """
     H, W = art_rgb.shape[:2]
     doc = PSDImage.new('RGB', (W, H))
@@ -202,9 +118,6 @@ def write_guides(path, art_rgb, regions, stroke_alpha, colors=None, sparkle_alph
         if alpha is not None:
             L = _named(PixelLayer.frompil(Image.new('RGB', (W, H), rgb), g, 'x'), tr(name))
             L.create_mask(Image.fromarray(np.asarray(alpha, np.uint8), 'L'))
-    if settings:
-        key = Resource.XMP_METADATA.value
-        doc.image_resources[key] = ImageResource(key=key, data=_xmp_packet(settings))
     doc.save(path)
     return path
 
