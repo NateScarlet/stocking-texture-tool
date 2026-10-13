@@ -86,6 +86,32 @@ for src, dst in (('b1-black-07-layers-page.png', 'layers-page.jpg'), ('b1-black-
 strip = (350, 300, 550, 700)
 save(row([load(f'b1-black-layers-{s}.png').crop(strip) for s in ('000', '030', '070', '100')], gap=6), 'layers-mix.png')
 
+# 预设文件的导出和导入, on the Texture page. Each raw shot is the whole page at DPR 2 (3200x2000); two crops of it are kept:
+# the Presets block (heading row with 导入… and 导出…, the list) and the status bar's note, which has the file's path (导出)
+# or says the name was taken (导入). The tool's own dialogs are not in the pictures: the shots were taken with the file
+# dialogs answered from a folder (D:\预设, D:\presets). Export left, import right when that leaves the UI at about
+# its size, else one above the other; scaled like the other pages (UI only, no texture to alias)
+PANEL_BG = (44, 44, 44)                 # the left panel and the status bar are the same grey
+TEXT_PX = {'': 295, '-en': 490}         # width of the longer note in CSS px (Range.getBoundingClientRect, DPR 2 doubles it)
+
+
+def preset_tile(name, text_css):
+    im = load(name)
+    w = max(540, round(text_css * 2) + 48)
+    tile = Image.new('RGB', (w, 152 + 56), PANEL_BG)
+    tile.paste(im.crop((0, 100, 540, 252)), (0, 0))
+    tile.paste(im.crop((0, 1944, w, 2000)), (0, 152))
+    return tile
+
+
+for sfx in ('', '-en'):
+    tiles = [preset_tile(f'b1-black-{n}{sfx}.png', TEXT_PX[sfx]) for n in ('08-presets-export', '09-presets-import')]
+    side = 820 / (sum(t.width for t in tiles) + 12) >= 0.5
+    both = row(tiles, gap=12) if side else col(tiles, gap=12)
+    if both.width > 820:
+        both = both.resize((820, round(both.height * 820 / both.width)), Image.LANCZOS)
+    save(both, f'presets-share{sfx}.png')
+
 # UI pages (scaled: overlays and text, no texture to alias)
 save(shot('b1-black-01-guides.png', 1600), 'guides-page.jpg')
 save(shot('b1-black-04-texture-page.png', 1600), 'texture-page.jpg')

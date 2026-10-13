@@ -201,6 +201,8 @@ Kase's share 0% / 30% / 70% / 100% (the rest is Fine lines; left to right), the 
 
 **Exporting and importing presets:** to give a tuned preset to someone, select it and click Export… beside the heading to save it as a small file (`.json`); they click Import…, pick the file, and it shows up in their presets. An imported preset whose name is already taken gets a number after it (say “Black (2)”) and never replaces one they already have. The file holds only the settings (style, density, tilt, strength, texture layers, sparkles and moiré effect), no picture and no direction lines.
 
+![Exporting and importing a preset. Top: a preset is selected, Export… is clicked, and the status bar says where the file went, D:\presets. Bottom: Import… is clicked and the file picked; a preset with that name already exists, so the imported one is called “Black · Fine lines (2)” and nothing is replaced](docs/images/presets-share-en.png)
+
 **Color exclusion** (on by default): parts of a region whose color is far from the stocking's (gold trim, gloves, bare skin) get no texture. Now and then a sheer knee showing skin gets excluded too; turn it off then.
 
 **Undo and redo:** the Undo and Redo buttons at the top right (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) work on the page you are on, and each page keeps its own history. On the Texture page they cover what you do there: style, density, tilt, strength, adding and deleting layers and their mix, sparkles, the moiré effect, loading a preset, Reset all, and the Color exclusion switch; one drag of a slider is one step. Saving, deleting, importing and exporting presets are not part of it. Undo on the Guides page still covers regions and direction lines. The history is not saved with the image and is cleared when you close it.

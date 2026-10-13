@@ -1,0 +1,12 @@
+{"width":1600,"height":1000,"dpr":2,"url":"http://127.0.0.1:8790/","steps":[
+ {"click":"#tab-look","wait":3000},
+ {"click":"[data-style=knit]"}, {"range":["#sparkle-depth",0]},{"range":["#sparkle-bright",0]},{"range":["#sparkle-even",0]},
+ {"click":"[data-zoom='1']","wait":500},
+ {"click":"#btn-preset-save","wait":500},
+ {"eval":"(() => { const i = document.querySelector('#preset-name'); i.value = 'Black · Fine lines'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"},
+ {"click":"#btn-preset-ok","wait":800},
+ {"wait":5500},
+ {"click":"#btn-preset-export","wait":2500,"eval":"[document.querySelector('#preset-select').value, document.querySelector('#btn-preset-export').disabled, document.querySelector('#status-msg').textContent]","shot":"D:/Video/assets/stocking-promo/shots/b1-black/08-presets-export-en.png"},
+ {"click":"#btn-preset-import","wait":2500,"eval":"[document.querySelector('#preset-select').value, document.querySelector('#status-msg').textContent]","shot":"D:/Video/assets/stocking-promo/shots/b1-black/09-presets-import-en.png"},
+ {"eval":"(() => { const m = document.querySelector('#status-msg'); const rg = document.createRange(); rg.selectNodeContents(m); const t = rg.getBoundingClientRect(); return [m.textContent, Math.round(t.width)]; })()"}
+]}
