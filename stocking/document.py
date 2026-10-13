@@ -19,6 +19,7 @@ import numpy as np
 
 from . import coverage, split
 from . import guide_fields as gf
+from . import look as look_settings
 from . import psd_io, symmetry, trace
 from . import walls as walls_mod
 from .i18n import tr
@@ -262,10 +263,11 @@ class Document:
     def open(cls, path=None, data=None, filename=None):
         name = filename or os.path.basename(path)
         ext = os.path.splitext(name)[1].lower()
-        dividers = None
+        dividers = settings = None
         if ext in PSD_EXTS:
             g = psd_io.read_guide_layers(path if data is None else io.BytesIO(data))
             art, regions, strokes, sparkle, dividers = g['art'], g['regions'], g['strokes'], g['sparkle'], g['dividers']
+            settings = g['settings']
         elif ext in IMAGE_EXTS:
             buf = np.fromfile(path, np.uint8) if data is None else np.frombuffer(data, np.uint8)
             bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
@@ -276,6 +278,8 @@ class Document:
             raise ValueError(tr('只支持 PNG、JPG 或 PSD：{name}', name=name))
         doc = cls(art, name, path)
         doc.sparkle = sparkle
+        if settings:
+            doc._take_settings(settings)
         with doc.lock:
             for nm in (list(regions) or [tr(n) for n in DEFAULT_REGIONS]):
                 doc._new_region(nm, regions.get(nm))
@@ -286,6 +290,16 @@ class Document:
             doc._touch()
             doc.dirty = False
         return doc
+
+    def _take_settings(self, settings):
+        """The 纹理 settings a guides PSD carries (psd_io.read_guide_layers): the look and 颜色排除. A look that is not
+        valid here (a setting from a newer version, say) is left out, and the page starts from the defaults."""
+        self.color_exclude = settings.get('color_exclude') is not False
+        if settings.get('look') is not None:
+            try:
+                self.look = look_settings.clean_params(settings['look'])
+            except (ValueError, TypeError):
+                pass
 
     def _import_strokes(self, stroke_alpha):
         """A raster stroke layer as vector strokes: the centre line of each stroke inside each region, i.e. exactly
