@@ -67,6 +67,22 @@ def test_session_keeps_dividers_deleted_walls_and_colour_exclusion(tmp_path):
         d.close()
 
 
+def test_session_drops_unreadable_look_instead_of_locking_the_texture_page(tmp_path):
+    """A session saved on another branch with a style this version does not have (e.g. 'dash') must fall back to no
+    saved look on load, rather than making GET /api/doc/{id}/look fail with 400 and leaving the Texture page dead."""
+    d = Document(np.zeros((60, 80, 3), np.uint8), 'c.png')
+    try:
+        d.look = {'style': 'dash', 'density': 100.0}
+        session.save(d, str(tmp_path))
+        e = session.load(str(tmp_path))
+        try:
+            assert e.look is None
+        finally:
+            e.close()
+    finally:
+        d.close()
+
+
 @needed
 def test_unsaved_guides_follow_the_last_file_that_held_them(tmp_path):
     """Opening another image would lose regions and 走向 lines only if they differ from the last file that held them:
