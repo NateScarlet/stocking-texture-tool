@@ -249,6 +249,27 @@ def test_thread_fades_out_instead_of_aliasing():
     assert np.abs(out.astype(int) - s.src.astype(int))[20:-20, 20:-20].max() <= 2
 
 
+@pytest.mark.parametrize('style', look.STYLES)
+def test_turning_texture_fade_off_draws_texture_even_where_courses_crowd(style):
+    """纹理减弱 (fade): on by default; when turned off, dense courses are drawn at full strength instead of fading
+    away, and check() reports nothing faded."""
+    assert look.DEFAULTS['fade'] is True and look.clean_params({})['fade'] is True
+    assert [look.clean_params({'fade': v})['fade'] for v in (False, 'false', '0', True, 'true', '1')] == [
+        False, False, False, True, True, True]
+    s = _flat((223, 216, 226), freq=1.6)
+    faded_out, _ = s.render(dict(OFF, style=style, strength=100, strength_auto=False, fade=True))
+    un_faded, _ = s.render(dict(OFF, style=style, strength=100, strength_auto=False, fade=False))
+    assert not np.array_equal(faded_out, un_faded)
+    if style in ('knit', 'loops', 'coil', 'lines'):
+        diff_on = np.abs(faded_out.astype(float) - s.src.astype(float))[20:-20, 20:-20].mean()
+        diff_off = np.abs(un_faded.astype(float) - s.src.astype(float))[20:-20, 20:-20].mean()
+        assert diff_off > diff_on + 2.0
+    assert s.check(dict(style=style, fade=True))[0].any()
+    assert not s.check(dict(style=style, fade=False))[0].any()
+    crop, _ = s.render(dict(OFF, style=style, strength=100, strength_auto=False, fade=False), (20, 30, 120, 130))
+    assert np.array_equal(crop, un_faded[30:130, 20:120])
+
+
 def test_tile_sampler():
     t = np.arange(16, dtype=np.float32).reshape(4, 4)
     rip = tiles.ripmap(t)

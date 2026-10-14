@@ -57,7 +57,7 @@ SPARKLE_KINDS = ('depth', 'bright', 'painted', 'even')
 DEFAULTS = {'style': 'knit', 'density': 100.0, 'tilt': 32.0, 'strength': 100.0,
             'strength_auto': True, 'sparkle_depth': 100.0, 'sparkle_bright': 100.0, 'sparkle_painted': 0.0,
             'sparkle_even': 0.0, 'sparkle_link': True, 'particle_on': False, 'particle': 100.0,
-            'moire_on': False, 'moire': 100.0, 'moire_area': 100.0,
+            'moire_on': False, 'moire': 100.0, 'moire_area': 100.0, 'fade': True,
             'weight': 100.0, 'amount': None, 'layers': [], 'lock_total': True}
 # What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. lock_total (the
 # default) holds the total at 100%: the layers are mixed in the ratio of their weights (0 = not drawn). Without it each
@@ -105,7 +105,7 @@ MOIRE_LIGHT = 0.13
 MOIRE_TEXTURE = 0.9
 RENDER_KEYS = ('style', 'density', 'tilt', 'strength', 'sparkle_depth', 'sparkle_bright',
                'sparkle_painted', 'sparkle_even', 'particle_on', 'particle',
-               'moire_on', 'moire', 'moire_area', 'weight', 'layers', 'lock_total')
+               'moire_on', 'moire', 'moire_area', 'fade', 'weight', 'layers', 'lock_total')
 MARGIN = 8                  # px around a crop, so blurs and gradients at its edge see real neighbours
 
 
@@ -173,7 +173,7 @@ def clean_params(p):
     q['moire_area'] = float(np.clip(float(q['moire_area']), 0, 100))
     for k in SPARKLE_KINDS:
         q[f'sparkle_{k}'] = float(np.clip(float(q[f'sparkle_{k}']), 0, 300))
-    for k in ('sparkle_link', 'particle_on', 'moire_on', 'lock_total'):
+    for k in ('sparkle_link', 'particle_on', 'moire_on', 'fade', 'lock_total'):
         q[k] = _flag(q[k])
     if q['sparkle_link']:
         q['sparkle_bright'] = q['sparkle_depth']        # linked amounts are one value; depth's wins
@@ -839,12 +839,16 @@ class Scene:
         """Where the texture is missing or weak, for the diagnostic overlay: (faded, excluded) bool masks.
         faded: the courses are so dense that the anti-moire fade took more than half the texture away.
         excluded: inside a solved region, but coverage dropped the colour (gold trim, gloves, skin)."""
-        _, fade = self.fade(params)
-        return fade > 0.5, (self.REG > 0) & (self.R == 0)
+        q = clean_params(params)
+        if not q['fade']:
+            faded = np.zeros(self.R.shape, bool)
+        else:
+            faded = self.fade(q)[1] > 0.5
+        return faded, (self.REG > 0) & (self.R == 0)
 
     def fade(self, params):
-        """(fraction of the texture faded by more than half, HxW float32 fade 0..1) for these settings. With several
-        layers a pixel's fade is the layers' own, each counted in its share."""
+        """(fraction of the texture that the anti-moire fade fades by more than half, HxW float32 fade 0..1) for these
+        settings. With several layers a pixel's fade is the layers' own, each counted in its share."""
         q = clean_params(params)
         vx, vy, ax, ay, same = self._gradients()
         fade = np.zeros(same.shape, np.float32)
@@ -867,7 +871,7 @@ class Scene:
 
     # ------------------------------------------------------------- rendering
 
-    def _draw_layer(self, layer, sl, src, R, V, A, alpha):
+    def _draw_layer(self, layer, sl, src, R, V, A, alpha, fade=True):
         """One layer over the (margined) crop sl: the picture with this layer's texture, BGR uint8."""
         g = geometry(layer['density'], self.w, self.h)
         style, p, s = layer['style'], g['period'], layer['strength'] / 100.0
@@ -875,24 +879,25 @@ class Scene:
             gn, gc = self.randoms('grain')[:2]
             see, trust = self.see_map()
             out, _ = knit.render_coil(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
-                                      see[sl], trust[sl], (gn[sl], gc[sl]), amp=s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+                                      see[sl], trust[sl], (gn[sl], gc[sl]), amp=s, f_lo=g['f_lo'], f_hi=g['f_hi'],
+                                      fade=fade)
         elif style in ('knit', 'loops'):
             draw = knit.render_thread if style == 'knit' else knit.render_loops
             out, _ = draw(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, self.region_tone()[sl],
-                          amp=(0.10 if style == 'knit' else 0.12) * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+                          amp=(0.10 if style == 'knit' else 0.12) * s, f_lo=g['f_lo'], f_hi=g['f_hi'], fade=fade)
         elif style == 'lines':
             th = np.deg2rad(layer['tilt'])
             phase = np.cos(th) * V / p + np.sin(th * self.side[sl]) * A / p
-            out, _ = knit.render_lines(src, R, phase, alpha, amp=0.115 * s, f_lo=g['f_lo'], f_hi=g['f_hi'])
+            out, _ = knit.render_lines(src, R, phase, alpha, amp=0.115 * s, f_lo=g['f_lo'], f_hi=g['f_hi'], fade=fade)
         elif style == 'oily':
             maps = self.oily_maps()
             gn, gc = self.randoms('grain')[:2]
-            out = oily.render_oily(src, R, V, A, alpha, g, s, *(m[sl] for m in maps), noise=(gn[sl], gc[sl]))
+            out = oily.render_oily(src, R, V, A, alpha, g, s, *(m[sl] for m in maps), noise=(gn[sl], gc[sl]), fade=fade)
         else:
             gn, gc = self.randoms('grain')[:2]
             out, _ = knit.render_grain(src, R, V / p + 0.37 * R, A / (p * g['wale_ratio']), alpha, None,
                                        knit_amp=0.04 * s, grain=0.050 * s, grain_dark=0.020 * s,
-                                       f_lo=g['f_lo'], f_hi=g['f_hi'], noise=(gn[sl], gc[sl]))
+                                       f_lo=g['f_lo'], f_hi=g['f_hi'], noise=(gn[sl], gc[sl]), fade=fade)
         return out
 
     def render(self, params, rect=None):
@@ -920,7 +925,7 @@ class Scene:
         drawn = drawn_layers(q)
         style = (drawn[0][0] if drawn else layer_list(q)[0])['style']
         weight, ready = self.sparkle_weight(q, style, sl)
-        renders = [self._draw_layer(layer, sl, src, R, V, A, alpha) for layer, _ in drawn]
+        renders = [self._draw_layer(layer, sl, src, R, V, A, alpha, fade=q['fade']) for layer, _ in drawn]
         shares = [share for _, share in drawn]
         if not renders:
             out = src.copy()                        # every layer at 0: no texture
