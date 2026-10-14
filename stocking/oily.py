@@ -1133,7 +1133,7 @@ def _joins(lab, group, gap):
 
 
 def oily_maps(src, R, alpha, A, V, scale=1.0, cut=None, REG=None, core_half=1.5, band_half=4.0, tail_len=3.0,
-              fill=None):
+              fill=None, pale_glint=False):
     """Whole image: (tone, core, band, tail, facing, centre, zone), each HxW float32, 0 outside the regions.
 
     src: BGR art. R: the visible stocking, region index per pixel. alpha: soft coverage (render_oily applies it).
@@ -1184,7 +1184,8 @@ def oily_maps(src, R, alpha, A, V, scale=1.0, cut=None, REG=None, core_half=1.5,
         Ls = _masked_blur(Y, seen, 3 * scale)
         lo, hi = (float(v) for v in np.percentile(Ls[seen], [3, 99]))
         tone[G] = np.clip((Ls[G] - (lo + hi) / 2) / max((hi - lo) / 2, TONE_FLOOR), -1, 1)
-        dark = float(1 - knit.sstep(DARK[0], DARK[1], float(np.median(Y[seen]))))
+        med = float(np.median(Y[seen]))
+        dark = 1.0 if pale_glint else float(1 - knit.sstep(DARK[0], DARK[1], med))
         body = G if wall is None else G & ~wall
         gap = None if fill is None else fill.get(int(i))
         lab, group, span = _pieces(body, gap, V, A)
@@ -1224,7 +1225,10 @@ def oily_maps(src, R, alpha, A, V, scale=1.0, cut=None, REG=None, core_half=1.5,
             pure = (cv2.erode(seen.astype(np.uint8), disc, borderType=cv2.BORDER_REPLICATE) > 0)[m]
             if pure.sum() >= MIN_PIECE:
                 vis = pure
-            fit, absolute, den, wlen, v0, a0, ab, noise = _lighting(Y[m][vis], Vg[vis], Ag[vis], k[vis],
+            Yg = Y[m][vis]
+            if pale_glint and med > 0.50:
+                Yg = np.clip(med + (Yg - med) * min(0.45 / max(1.0 - med, 0.10), 3.0), 0.0, 1.0)
+            fit, absolute, den, wlen, v0, a0, ab, noise = _lighting(Yg, Vg[vis], Ag[vis], k[vis],
                                                                     int(k.max()) + 1, hmed, scale)
             middle, kq = None, None
             if whole:
