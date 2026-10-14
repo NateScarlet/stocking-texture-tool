@@ -88,31 +88,48 @@ def test_centre_line_is_smoother_than_the_hand_path():
 
 
 def test_centre_line_does_not_add_zigzag():
-    """Even on an exactly straight stroke (no tremor at all) the extraction must not invent corners."""
-    Q, _ = extracted(hand_path(60, 1000, 0.0, seed=1))
-    assert zigzag(Q) < 0.5, f'straight stroke came back with corners: {zigzag(Q):.2f} deg/100px'
+    """Even on an exactly straight stroke (no tremor at all), including a slanted one whose rasterization is a pixel
+    staircase, the extraction must not invent corners."""
+    for deg in (0, 5, 15, 30):
+        th = np.deg2rad(deg)
+        t = np.linspace(0, 800, 60)
+        pts = np.stack([t * np.cos(th), t * np.sin(th)], 1)
+        Q, _ = extracted(pts)
+        assert zigzag(Q) < 0.5, f'{deg} deg straight stroke came back with corners: {zigzag(Q):.2f} deg/100px'
 
 
 def test_centre_line_keeps_the_shape_of_a_bent_stroke():
-    """A stroke drawn round a bend (膝盖 ∩) must come back bent, not flattened onto its main axis.
+    """A stroke drawn round a bend (膝盖 ∩, including a deep one whose depth exceeds its half-width) must come back
+    bent, not flattened onto its main axis.
 
     走向 strokes are drawn as arcs (README: 膝盖上方 ∩, 下方 ∪, and a knee stroke joining thigh to calf), and the
-    PCA binning could fold the far side of a bend into the same bin as the near side.
+    PCA binning folded the far side of a deep bend into the same bin as the near side.
     """
     t = np.linspace(-1, 1, 80)
-    arc = np.stack([t * 300, -120 * (1 - t ** 2)], 1)          # a ∩
-    Q, P = extracted(arc)
-    assert len(Q) >= 3
-    # the apex is the topmost point (image y grows downward); it must survive rather than being averaged away
-    depth = max(Q[0, 1], Q[-1, 1]) - Q[:, 1].min()
-    assert depth > 0.6 * 120, f'arc flattened: depth {depth:.0f} of 120'
-    # and the ends must stay at the ends
-    assert np.hypot(*(Q[0] - P[0])) < 15 and np.hypot(*(Q[-1] - P[-1])) < 15
+    for half_w, h_arc in ((300, 120), (60, 150)):
+        arc = np.stack([t * half_w, -h_arc * (1 - t ** 2)], 1)      # a ∩
+        Q, P = extracted(arc)
+        assert len(Q) >= 3
+        # the apex is the topmost point (image y grows downward); it must survive rather than being averaged away
+        depth = max(Q[0, 1], Q[-1, 1]) - Q[:, 1].min()
+        assert depth > 0.6 * h_arc, f'arc (half_w={half_w}) flattened: depth {depth:.0f} of {h_arc}'
+        # and the ends must stay at the ends (unordered: the walk may start from either end)
+        d0 = min(np.hypot(*(Q[0] - P[0])), np.hypot(*(Q[-1] - P[0])))
+        d1 = min(np.hypot(*(Q[0] - P[-1])), np.hypot(*(Q[-1] - P[-1])))
+        assert d0 < 15 and d1 < 15
 
 
 def test_centre_line_keeps_its_ends():
-    """The stroke spans about 80% of the region's width (README); extraction must not shorten it."""
+    """The stroke spans about 80% of the region's width (README); extraction must not shorten it, even when 2D hand
+    jitter leaves tiny spurs on the thinned skeleton."""
     Q, P = extracted(hand_path(60, 1000, 4.0, seed=3))
     span_in = np.hypot(*(P[-1] - P[0]))
     span_out = np.hypot(*(Q[-1] - Q[0]))
     assert span_out > 0.97 * span_in, f'stroke shrank from {span_in:.0f} to {span_out:.0f} px'
+    rng = np.random.default_rng(0)
+    for seed in range(30):
+        t = np.linspace(0, 1, 120)
+        pts = np.stack([t * 600 + rng.normal(0, 1.8, len(t)),
+                        50 + np.sin(t * 6) * 8 + rng.normal(0, 1.8, len(t))], 1)
+        Q, P = extracted(pts)
+        assert np.hypot(*(Q[-1] - Q[0])) > 0.95 * np.hypot(*(P[-1] - P[0]))
