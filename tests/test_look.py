@@ -842,6 +842,30 @@ def test_particles_follow_the_glint_line_and_go_over_every_non_oily_style(style)
         assert np.array_equal(s.render(p, rect)[0], whole[y0:y1, x0:x1]), rect
 
 
+def test_particles_touch_the_image_frame_and_fade_smoothly_at_their_own_boundary():
+    """A stocking running off the image frame is not kept blank at the frame, while internal region boundaries keep
+    their blank rim and the highlight particles fade out gradually toward the edges of their own range."""
+    h, w = 400, 260
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    m = (xx >= 50) & (xx < 210)                                            # touches top (y=0) and bottom (y=h-1) of image
+    shade = 40 + 85 * np.exp(-((xx - 130) / 18.0) ** 2)
+    art = np.full((h, w, 3), 240, np.uint8)
+    art[m] = np.clip(shade[m], 0, 255)[:, None].astype(np.uint8)
+    R = m.astype(np.int8)
+    s = look.Scene(art, R, np.where(m, yy, 0.0), np.where(m, 130.0 - xx, 0.0), m, m.astype(np.float32), ['左腿'])
+    plain, _ = s.render(dict(OFF, style='knit'))
+    out, _ = s.render(dict(OFF, style='knit', particle_on=True, particle=100))
+    diff = np.abs(out.astype(float) - plain.astype(float)).mean(2)
+    assert diff[0:4, 120:141].max() > 15.0 and diff[h - 4:h, 120:141].max() > 15.0   # not blank at the image border
+    assert diff[:, 50:54].max() == 0 and diff[:, 206:210].max() == 0                 # blank at internal side borders
+    _, _, _, _, _, centre, _ = s.oily_maps()
+    s_rad = np.sqrt(np.maximum(-2.0 * np.log(np.clip(centre, 1e-6, 1.0)), 0.0)) / 3.7169
+    inner = diff[m & (s_rad < 0.25) & (centre > 1e-3)].mean()
+    mid = diff[m & (s_rad >= 0.35) & (s_rad < 0.60) & (centre > 1e-3)].mean()
+    outer = diff[m & (s_rad >= 0.70) & (s_rad < 0.95) & (centre > 1e-3)].mean()
+    assert inner > mid > outer and outer < 2.0                             # gradual fade toward the highlight's boundary
+
+
 # ---------------------------------------------------------------- 纹理层
 
 def _single(s, **kw):

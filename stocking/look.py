@@ -494,8 +494,8 @@ def particle_active(q):
 def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
     """高光粒子 over a style's render: along 油光's glint tracks (core, band, tail, centre from Scene.oily_maps,
     cropped like src), the highlight line is drawn purely out of discrete 1-3 px grains at the spine that thin out
-    into scattered particles across the skirt, with inter-particle pores breaking up smooth painted highlights.
-    field, gate: Scene.particle_maps (cropped like src); amount: the 强度 slider, 0..1."""
+    and fade smoothly toward the boundary of the highlight's range, with inter-particle pores breaking up smooth
+    painted highlights. field, gate: Scene.particle_maps (cropped like src); amount: the 强度 slider, 0..1."""
     if amount <= 0:
         return out
     on = (centre > 1e-3) & (tail >= 0.01)
@@ -505,21 +505,25 @@ def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
     c_clip = np.clip(centre, 1e-6, 1.0)
     c169 = np.power(c_clip, 1.69)
     # d / tw = (CORE_REL / TAIL_REL) * 1.3 * sqrt(-2 * ln(centre)) = 0.416 * sqrt(-2 * ln(centre)), so exp(-d / tw) >= 0.21 where centre > 1e-3
-    tail_decay = np.exp(-0.416 * np.sqrt(np.maximum(-2.0 * np.log(c_clip), 0.0)))
+    s_rad = np.sqrt(np.maximum(-2.0 * np.log(c_clip), 0.0))
+    tail_decay = np.exp(-0.416 * s_rad)
     g_s = np.where(on, np.clip(tail / np.maximum(tail_decay, 0.15), 0.0, 1.0), 0.0)
     if not (g_s > 0).any():
         return out
-    g_eff = np.power(g_s, 0.42)
+    u_r = np.clip(s_rad / 3.7169, 0.0, 1.0)
+    fade_r = 1.0 - knit.sstep(0.15, 0.95, u_r)
+    fade_g = knit.sstep(0.05, 0.32, g_s) * knit.sstep(0.01, 0.05, tail)
+    g_eff = np.power(g_s, 0.45) * fade_g
     rib = np.power(c_clip, (1.3 / 2.25) ** 2) * on
     skirt = np.power(c_clip, (1.3 / 3.35) ** 2) * on
-    rad = np.clip(0.58 * rib + 0.42 * skirt, 0.0, 1.0)
-    env = g_eff * rad
-    tau = -0.25 + 1.55 * np.power(np.clip(1.0 - env, 0.0, 1.0), 0.85)
+    rad = np.clip(0.58 * rib + 0.42 * skirt, 0.0, 1.0) * fade_r
+    env = np.clip(g_eff * rad * gate, 0.0, 1.0)
+    tau = -0.28 + 1.52 * np.power(np.clip(1.0 - env, 0.0, 1.0), 0.85)
     pos = np.clip(field - tau, 0.0, None)
-    spark = np.tanh(0.95 * pos) * (0.45 + 0.55 * np.power(env, 0.40)) * (env > 0.010)
+    spark = np.tanh(0.95 * pos) * np.power(env, 0.65)
     s_f = src.astype(np.float32) / 255.0
     lum_s = s_f @ np.array([0.114, 0.587, 0.299], np.float32)
-    pore_env = np.clip(0.62 * c169 * g_eff + 0.38 * env, 0.0, 1.0)
+    pore_env = np.clip(0.62 * c169 * g_eff + 0.38 * env, 0.0, 1.0) * fade_r
     pore = np.tanh(0.85 * np.clip(-field - 0.05, 0.0, None)) * pore_env
     mean_s = np.maximum(s_f.mean(axis=2, keepdims=True), 0.06)
     c_norm = np.clip(1.0 + 1.28 * (s_f / mean_s - 1.0), 0.66, 1.36)
@@ -527,7 +531,7 @@ def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
     w_warm = np.clip(0.85 - 1.15 * lum_s, 0.10, 0.65)[..., None]
     tint = (1.0 - w_warm) * c_norm + w_warm * warm
     out_f = out.astype(np.float32)
-    bright = np.clip(0.40 * spark * g, 0.0, 0.68)[..., None] * tint
+    bright = np.clip(0.46 * spark * g, 0.0, 0.68)[..., None] * tint
     lifted = 255.0 - (255.0 - out_f) * (1.0 - np.clip(bright, 0.0, 0.72))
     x_l = lifted / 255.0
     dip = (0.36 * pore * g)[..., None] * x_l * (1.0 - x_l) * 255.0
@@ -633,21 +637,52 @@ class Scene:
 
     def particle_maps(self):
         """(field, gate) of 高光粒子 over the whole image, cached: crops slice them, so a crop matches the whole.
-        A few pixels inside every region boundary are kept clear of particles."""
+        A few pixels inside every internal region boundary (not the image frame) are kept clear of particles, and the
+        boundaries and ends of the highlight's own range fade out smoothly."""
         with self._lock:
             maps = self._stretch.get('particle')
         if maps is None:
             scale = float(np.sqrt(self.w * self.h / REF_AREA))
+            _, _, _, tail, _, centre, _ = self.oily_maps()
             field = self.randoms('particle')
-            same = _same_region(self.R) & (self.alpha > 0.85)
+            R_pad = np.pad(self.R, 1, mode='edge')
+            a_ok = self.alpha > 0.85
+            a_pad = np.pad(a_ok, 1, mode='edge')
+            same = (self.R > 0) & a_ok
+            for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                same &= ((R_pad[1 + dy:self.h + 1 + dy, 1 + dx:self.w + 1 + dx] == self.R)
+                         & a_pad[1 + dy:self.h + 1 + dy, 1 + dx:self.w + 1 + dx])
             if self.cut is not None:
                 same &= ~self.cut
-            d_edge = cv2.distanceTransform(same.astype(np.uint8), cv2.DIST_L2, 5)
+            d_edge = (np.full((self.h, self.w), float(max(self.h, self.w)), np.float32) if same.all()
+                      else cv2.distanceTransform(same.astype(np.uint8), cv2.DIST_L2, 5))
             r0 = max(3.0, 5.0 * scale)
-            r1 = r0 + max(3.0, 4.0 * scale)
+            r1 = r0 + max(14.0, 22.0 * scale)
             edge = knit.sstep(r0, r1, d_edge)
+            on = (centre > 1e-3) & (tail >= 0.01) & (self.R > 0)
+            if on.any():
+                on_pad = np.pad(on, 1, mode='edge')
+                on_in = on.copy()
+                for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                    on_in &= on_pad[1 + dy:self.h + 1 + dy, 1 + dx:self.w + 1 + dx]
+                d_on = (np.full((self.h, self.w), float(max(self.h, self.w)), np.float32) if on_in.all()
+                        else cv2.distanceTransform(on_in.astype(np.uint8), cv2.DIST_L2, 5))
+                c_pad = np.pad(centre > 0.03, 1, mode='edge')
+                end_cap = ~on & (self.R > 0)
+                near_spine = np.zeros((self.h, self.w), bool)
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        if dy or dx:
+                            near_spine |= c_pad[1 + dy:self.h + 1 + dy, 1 + dx:self.w + 1 + dx]
+                end_cap &= near_spine
+                d_cap = (cv2.distanceTransform((~end_cap).astype(np.uint8), cv2.DIST_L2, 5)
+                         if end_cap.any() else np.full((self.h, self.w), float(max(self.h, self.w)), np.float32))
+                tip = (knit.sstep(0.0, max(5.0, 8.0 * scale), d_on)
+                       * knit.sstep(0.0, max(18.0, 28.0 * scale), d_cap))
+            else:
+                tip = np.zeros((self.h, self.w), np.float32)
             gate = (knit.sstep(0.005, 0.04, knit._luma(self.src, 1.5))
-                    * (self.alpha ** 2) * edge * (self.R > 0)).astype(np.float32)
+                    * (self.alpha ** 2) * edge * tip * (self.R > 0)).astype(np.float32)
             maps = (field, gate)
             with self._lock:
                 self._stretch['particle'] = maps
