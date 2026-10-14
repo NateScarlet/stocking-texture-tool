@@ -832,8 +832,8 @@ def test_particles_follow_the_glint_line_and_go_over_every_non_oily_style(style)
     assert border.sum() > 1000 and spine.sum() > 2000 and flank.sum() > 10000
     delta = (out.astype(float) - plain.astype(float)).mean(2)
     assert np.abs(delta[border]).max() == 0                                # clear of the region boundary
-    assert (np.abs(delta[spine]) > 3.0).mean() > 0.65                      # dense particle coverage along the spine
-    assert delta[spine].mean() > 10.0 and delta[spine].std() > 12.0 and np.percentile(delta[spine], 95) > 30.0
+    assert 0.25 < (delta[spine] > 2.0).mean() < 0.50                       # discrete particles, not a solid band
+    assert delta[spine].mean() > 4.0 and delta[spine].std() > 12.0 and np.percentile(delta[spine], 95) > 35.0
     assert np.abs(delta[flank]).max() == 0                                 # untouched away from the glint line
     p = dict(OFF, style=style, particle_on=True, particle=80, sparkle_even=40)
     whole, _ = s.render(p)
