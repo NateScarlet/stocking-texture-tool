@@ -163,7 +163,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       layers: JSON.stringify(p.layers || []), lock_total: p.lock_total,
       sparkle_depth: p.sparkle_depth, sparkle_bright: p.sparkle_bright, sparkle_painted: p.sparkle_painted,
       sparkle_even: p.sparkle_even,
-      sparkle_link: p.sparkle_link, moire_on: p.moire_on, moire: p.moire, moire_area: p.moire_area });
+      sparkle_link: p.sparkle_link, particle_on: p.particle_on, particle: p.particle,
+      moire_on: p.moire_on, moire: p.moire, moire_area: p.moire_area });
     for (const [k, v] of Object.entries(extra || {})) q.set(k, v);
     return q.toString();
   }
@@ -686,6 +687,10 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       setVal($(`#sparkle-${k}-val`), all[`sparkle_${k}`], '%');
     }
     $('#btn-sparkle-link').setAttribute('aria-pressed', String(!!all.sparkle_link));
+    $('#particle-on').checked = !!all.particle_on;
+    $('#particle-fields').hidden = !all.particle_on;
+    $('#particle').value = all.particle;
+    setVal($('#particle-val'), all.particle, '%');
     $('#moire-on').checked = !!all.moire_on;
     $('#moire-fields').hidden = !all.moire_on;
     $('#moire').value = all.moire;
@@ -1005,6 +1010,8 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
   $('#sparkle-bright').addEventListener('input', (e) => setAmount('sparkle_bright', +e.target.value));
   $('#sparkle-painted').addEventListener('input', (e) => set({ sparkle_painted: +e.target.value }, { gesture: 'sparkle_painted' }));
   $('#sparkle-even').addEventListener('input', (e) => set({ sparkle_even: +e.target.value }, { gesture: 'sparkle_even' }));
+  $('#particle-on').addEventListener('change', (e) => set({ particle_on: e.target.checked }));
+  $('#particle').addEventListener('input', (e) => set({ particle: +e.target.value }, { gesture: 'particle' }));
   $('#moire-on').addEventListener('change', (e) => set({ moire_on: e.target.checked }));
   $('#moire').addEventListener('input', (e) => set({ moire: +e.target.value }, { gesture: 'moire' }));
   $('#moire-area').addEventListener('input', (e) => set({ moire_area: +e.target.value }, { gesture: 'moire_area' }));
@@ -1067,6 +1074,7 @@ export function createLook({ getDoc, getArt, request, edit, flash, focusByKeyboa
       lock_total: L.info ? L.info.blend_auto : true,         // what a new look starts with: the user's last choice
       sparkle_depth: layer ? 0 : 100,
       sparkle_bright: layer ? 0 : 100, sparkle_painted: layer ? 100 : 0, sparkle_even: 0, sparkle_link: true,
+      particle_on: false, particle: 100,
       moire_on: false, moire: 100, moire_area: 100 });
     L.beforeReset = before;
     renderReset();

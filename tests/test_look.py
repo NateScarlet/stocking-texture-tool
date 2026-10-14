@@ -782,6 +782,61 @@ def test_the_depth_model_is_started_for_the_moire(monkeypatch):
     assert started == [d]
 
 
+# ---------------------------------------------------------------- 高光粒子
+
+NON_OILY_STYLES = tuple(s for s in look.STYLES if s != 'oily')
+
+
+def test_particle_is_a_switch_that_is_off_by_default_over_a_strength_slider():
+    assert look.DEFAULTS['particle_on'] is False and look.clean_params({})['particle_on'] is False
+    assert [look.clean_params({'particle_on': v})['particle_on'] for v in (True, 'true', '1', False, 'false', '0')] == [
+        True, True, True, False, False, False]                                    # from a query string, too
+    assert look.DEFAULTS['particle'] == 100 and look.clean_params({})['particle'] == 100
+    assert look.clean_params({'particle': 140})['particle'] == 100 and look.clean_params({'particle': -5})['particle'] == 0
+    assert look.clean_params({'particle': '35'})['particle'] == 35
+    assert all(k in look.RENDER_KEYS for k in ('particle_on', 'particle'))
+
+
+def test_particles_are_drawn_only_with_the_switch_on_and_the_slider_keeps_its_value():
+    on = lambda **kw: look.particle_active(look.clean_params(dict({'particle_on': True}, **kw)))
+    assert on() and on(particle=40) and not on(particle=0)
+    assert not look.particle_active(look.clean_params({}))
+    off = look.clean_params({'particle_on': False, 'particle': 35})
+    assert not look.particle_active(off) and off['particle'] == 35
+    s, _, _ = _dome()
+    p = dict(OFF, style='knit')
+    plain, _ = s.render(p)
+    assert np.array_equal(s.render(dict(p, particle_on=False, particle=100))[0], plain)
+    full, _ = s.render(dict(p, particle_on=True, particle=100))
+    half, _ = s.render(dict(p, particle_on=True, particle=50))
+    assert not np.array_equal(full, plain) and np.array_equal(s.render(dict(p, particle_on=True, particle=0))[0], plain)
+    diff = lambda im: np.abs(im.astype(float) - plain.astype(float)).mean()
+    assert 0 < diff(half) < diff(full)
+
+
+@pytest.mark.parametrize('style', NON_OILY_STYLES)
+def test_particles_follow_the_glint_line_and_go_over_every_non_oily_style(style):
+    """Every non-oily style: 高光粒子 brightens and granulates along 油光's glint line (not across the flat flanks),
+    leaves everything off the stockings alone, and a crop is pixel-identical to the same area of the whole render."""
+    s, _, _ = _dome()
+    plain, _ = s.render(dict(OFF, style=style))
+    out, _ = s.render(dict(OFF, style=style, particle_on=True, particle=100))
+    inside = s.R > 0
+    assert np.array_equal(out[~inside], plain[~inside])
+    _, core, _, tail, _, _, _ = s.oily_maps()
+    spine = inside & (core > 0.20)
+    flank = inside & (tail < 0.01)
+    assert spine.sum() > 2000 and flank.sum() > 10000
+    delta = (out.astype(float) - plain.astype(float)).mean(2)
+    assert delta[spine].mean() > 6.0 and delta[spine].std() > 5.0 and np.percentile(delta[spine], 95) > 18.0
+    assert np.abs(delta[flank]).max() == 0                                 # untouched away from the glint line
+    p = dict(OFF, style=style, particle_on=True, particle=80, sparkle_even=40)
+    whole, _ = s.render(p)
+    for rect in [(100, 150, 300, 400), (0, 0, 64, 64), (330, 540, 400, 600)]:
+        x0, y0, x1, y1 = rect
+        assert np.array_equal(s.render(p, rect)[0], whole[y0:y1, x0:x1]), rect
+
+
 # ---------------------------------------------------------------- 纹理层
 
 def _single(s, **kw):

@@ -44,6 +44,7 @@
  "保存": "Save",
  "保存为新预设…": "Save as new preset…",
  "保存预设": "Save preset",
+ "像油光那样顺着画面里的受光处找出高光带（深色丝袜上同样会延续到整条腿），但把高光画成细密的粒子，中间密、往两侧渐渐散开。默认关，打开开关才有，可以叠加在任何样式上。": "Finds the highlight bands along the lit parts of the picture the way Glossy does (running the whole length of the leg on dark stockings too), and draws them as fine particles, dense along the middle and scattering outward. Off by default; turn the switch on to lay it over any style.",
  "先在“{name}”上画走向线，再镜像到另一边": "Draw direction lines on “{name}” first, then mirror them to the other side",
  "先在上面选一个部位": "First pick a region above",
  "先在左边选一个要分割的部位": "First pick the region to split, on the left",
@@ -356,6 +357,8 @@
  "预设要有一个名字": "A preset needs a name",
  "颜色排除": "Color exclusion",
  "颜色排除说明": "About color exclusion",
+ "高光粒子": "Highlight particles",
+ "高光粒子说明": "About highlight particles",
  "（求解中…）": " (solving…)",
  "：从每个鼓起处顶上的一小圈开始，一圈圈往外扩，环数也跟着变多；拉满就是整个鼓起的地方都有。": ": starts as one small ring on top of each bulge and spreads outward, gaining rings as it grows; all the way up covers the whole bulge.",
  "：打开时这两个数量保持一样，拖其中一个，另一个跟着变。": ": when on, the two amounts stay equal; drag either and the other follows.",
@@ -364,6 +367,7 @@
  "：整只丝袜上到处都撒，不挑位置，适合亮片丝、闪光丝。": ": all over the stockings, anywhere; for sequinned or glitter stockings.",
  "：条纹的明暗有多深。": ": how strongly the rings lighten and darken the stocking.",
  "：画一条线，松开鼠标就分成两块": ": draw a line and let go to cut it in two",
+ "：高光粒子有多亮、多明显。": ": how bright and visible the highlight particles are.",
  "；": "; ",
  "；空格或中键拖动画面，方向键平移，+ − 缩放": "; Space or middle-drag moves the view, arrow keys pan, + − zoom"
 }

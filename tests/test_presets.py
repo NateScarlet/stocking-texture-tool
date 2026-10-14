@@ -41,12 +41,16 @@ def test_a_preset_keeps_the_layers_and_their_weights_and_keeps_automatic_strengt
 
 
 def test_a_preset_keeps_the_moire_settings_and_one_saved_before_them_reads_as_off():
-    presets.save('水波', {'style': 'knit', 'moire_on': True, 'moire': 60, 'moire_area': 35})
+    presets.save('水波', {'style': 'knit', 'moire_on': True, 'moire': 60, 'moire_area': 35,
+                          'particle_on': True, 'particle': 75})
     (p,) = presets.listing()
     assert (p['params']['moire_on'], p['params']['moire'], p['params']['moire_area']) == (True, 60, 35)
-    settings.update(**{presets.KEY: {'旧': {k: v for k, v in look.DEFAULTS.items() if not k.startswith('moire')}}})
+    assert (p['params']['particle_on'], p['params']['particle']) == (True, 75)
+    settings.update(**{presets.KEY: {'旧': {k: v for k, v in look.DEFAULTS.items()
+                                            if not k.startswith(('moire', 'particle'))}}})
     old = presets.listing()[0]['params']
     assert (old['moire_on'], old['moire'], old['moire_area']) == (False, 100, 100)
+    assert (old['particle_on'], old['particle']) == (False, 100)
 
 
 def test_saving_over_a_name_replaces_it_in_place_and_delete_removes_it():

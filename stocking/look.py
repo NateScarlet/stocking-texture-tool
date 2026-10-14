@@ -1,4 +1,5 @@
-"""From solved courses to the finished texture: style, density, tilt, strength, sparkles, moire; renders and crops.
+"""From solved courses to the finished texture: style, density, tilt, strength, sparkles, highlight particles, moire;
+renders and crops.
 
 斜单线 (earlier called 单线亮点) and 加濑风 call the knit renderers exactly as the reference renders the presets were
 tuned on did (tests/verify.py), with their seed and draw order, so default settings reproduce those renders. 细线,
@@ -8,7 +9,11 @@ random fields (sparkles, grain) are drawn once per image at full size, and every
 from the whole image, so a crop is pixel-identical to the same area of the full render: the live 100% preview shows
 exactly what the export will hold.
 
-The 摩尔纹效果 is not a style but a layer over whatever style is chosen: bands of light and dark along the contours of
+高光粒子 (试验) and the 摩尔纹效果 are not styles but layers over whatever style is chosen. 高光粒子 finds the highlight
+lines along each limb the way 油光 does (including the floor glint down a dark stocking) and draws them out of 1-3 px
+particles instead of a smooth glossy band: dense packed grains along the spine that thin out into discrete scattered
+specks across the skirt, with inter-particle pores breaking up smooth painted highlights. The 摩尔纹效果 lays bands of
+light and dark along the contours of
 the depth model's bulge, one ring for every fixed step of height (moire_phase, moire_fringes), grown from the crown
 outward by the 面积 slider. It is moire on purpose, as the user asks for it. The texture itself still never aliases
 (the fade in every style), and the bands are far coarser than a pixel and fade out where they would not be, so they
@@ -19,8 +24,8 @@ them follow the same solved guides. The first layer is the look's own keys, the 
 rendered as a whole (the picture with that layer's texture on it) and the renders are mixed pixel by pixel in the
 ratio of the weights, so the mix is the picture plus each texture in its share. With the total unlocked (lock_total off)
 each layer is laid on by its own amount instead, a percentage whatever the others have: the picture plus each texture at
-its own amount, so the amounts may add up to more than 100% (heavier) or less (the picture shows through). The 亮点
-and the 摩尔纹效果 go on afterwards, once, over the mix; the sparkles take the recipe of the first layer drawn.
+its own amount, so the amounts may add up to more than 100% (heavier) or less (the picture shows through). The 亮点,
+高光粒子 and the 摩尔纹效果 go on afterwards, once, over the mix; the sparkles take the recipe of the first layer drawn.
 """
 import json
 import re
@@ -51,7 +56,8 @@ LEGACY_STYLES = {'p_oily': 'oily'}                  # saved by an early version
 SPARKLE_KINDS = ('depth', 'bright', 'painted', 'even')
 DEFAULTS = {'style': 'knit', 'density': 100.0, 'tilt': 32.0, 'strength': 100.0,
             'strength_auto': True, 'sparkle_depth': 100.0, 'sparkle_bright': 100.0, 'sparkle_painted': 0.0,
-            'sparkle_even': 0.0, 'sparkle_link': True, 'moire_on': False, 'moire': 100.0, 'moire_area': 100.0,
+            'sparkle_even': 0.0, 'sparkle_link': True, 'particle_on': False, 'particle': 100.0,
+            'moire_on': False, 'moire': 100.0, 'moire_area': 100.0,
             'weight': 100.0, 'amount': None, 'layers': [], 'lock_total': True}
 # What one 纹理层 holds: the look's own keys are the first layer's, each of `layers` has these. lock_total (the
 # default) holds the total at 100%: the layers are mixed in the ratio of their weights (0 = not drawn). Without it each
@@ -98,7 +104,8 @@ MOIRE_SHARP = 2.2
 MOIRE_LIGHT = 0.13
 MOIRE_TEXTURE = 0.9
 RENDER_KEYS = ('style', 'density', 'tilt', 'strength', 'sparkle_depth', 'sparkle_bright',
-               'sparkle_painted', 'sparkle_even', 'moire_on', 'moire', 'moire_area', 'weight', 'layers', 'lock_total')
+               'sparkle_painted', 'sparkle_even', 'particle_on', 'particle',
+               'moire_on', 'moire', 'moire_area', 'weight', 'layers', 'lock_total')
 MARGIN = 8                  # px around a crop, so blurs and gradients at its edge see real neighbours
 
 
@@ -161,11 +168,12 @@ def clean_params(p):
     q.update({k: v for k, v in p.items() if k in DEFAULTS and v is not None})
     q.update(_clean_layer(p))
     q['layers'] = _clean_layers(q['layers'])
+    q['particle'] = float(np.clip(float(q['particle']), 0, 100))
     q['moire'] = float(np.clip(float(q['moire']), 0, 100))
     q['moire_area'] = float(np.clip(float(q['moire_area']), 0, 100))
     for k in SPARKLE_KINDS:
         q[f'sparkle_{k}'] = float(np.clip(float(q[f'sparkle_{k}']), 0, 300))
-    for k in ('sparkle_link', 'moire_on', 'lock_total'):
+    for k in ('sparkle_link', 'particle_on', 'moire_on', 'lock_total'):
         q[k] = _flag(q[k])
     if q['sparkle_link']:
         q['sparkle_bright'] = q['sparkle_depth']        # linked amounts are one value; depth's wins
@@ -464,6 +472,70 @@ def apply_moire(out, src, fringes, amount, light):
     return np.clip(np.round(res), 0, 255).astype(np.uint8)
 
 
+def particle_field(rng, h, w, scale=1.0):
+    """Multi-scale grain field (unit std, float32) for 高光粒子: 1-3 px rounded grains (coarse + fine) with crisp
+    1 px tips (sharp), scaled with the image (scale)."""
+    raw = rng.standard_normal((h, w)).astype(np.float32)
+    fine = cv2.GaussianBlur(raw, (0, 0), 0.6)
+    fine /= max(float(fine.std()), 1e-6)
+    coarse = cv2.GaussianBlur(raw, (0, 0), max(0.85, 1.10 * float(scale)))
+    coarse /= max(float(coarse.std()), 1e-6)
+    sharp = fine - cv2.GaussianBlur(fine, (0, 0), 0.9)
+    sharp /= max(float(sharp.std()), 1e-6)
+    field = 0.46 * coarse + 0.38 * fine + 0.16 * sharp
+    return (field / max(float(field.std()), 1e-6)).astype(np.float32)
+
+
+def particle_active(q):
+    """Whether the (cleaned) settings q draw 高光粒子 at all: its switch is on and the 强度 slider is above 0."""
+    return bool(q['particle_on']) and q['particle'] > 0
+
+
+def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
+    """高光粒子 over a style's render: along 油光's glint tracks (core, band, tail, centre from Scene.oily_maps,
+    cropped like src), the highlight line is drawn as a dense stream of 1-3 px grains at the spine that thins out
+    into discrete scattered particles across the skirt, with inter-particle pores breaking up smooth painted
+    highlights. field, gate: Scene.particle_maps (cropped like src); amount: the 强度 slider, 0..1."""
+    if amount <= 0:
+        return out
+    on = (centre > 1e-3) & (tail >= 0.01)
+    g = gate * np.float32(amount) * on
+    if not (g > 0).any():
+        return out
+    c_clip = np.clip(centre, 1e-6, 1.0)
+    c169 = np.power(c_clip, 1.69)
+    # d / tw = (CORE_REL / TAIL_REL) * 1.3 * sqrt(-2 * ln(centre)) = 0.416 * sqrt(-2 * ln(centre)), so exp(-d / tw) >= 0.21 where centre > 1e-3
+    tail_decay = np.exp(-0.416 * np.sqrt(np.maximum(-2.0 * np.log(c_clip), 0.0)))
+    g_s = np.where(on, np.clip(tail / np.maximum(tail_decay, 0.15), 0.0, 1.0), 0.0)
+    if not (g_s > 0).any():
+        return out
+    g_eff = np.power(g_s, 0.55)
+    rib = np.power(c_clip, (1.3 / 1.95) ** 2) * on
+    skirt = np.power(c_clip, (1.3 / 2.85) ** 2) * on
+    rad = np.clip(0.56 * rib + 0.44 * skirt, 0.0, 1.0)
+    env = g_eff * rad
+    tau = -0.08 + 2.38 * np.power(np.clip(1.0 - env, 0.0, 1.0), 0.58)
+    pos = np.clip(field - tau, 0.0, None)
+    spark = np.tanh(0.95 * pos) * (0.45 + 0.55 * np.power(env, 0.42)) * (env > 0.012)
+    s_f = src.astype(np.float32) / 255.0
+    lum_s = s_f @ np.array([0.114, 0.587, 0.299], np.float32)
+    base_need = np.clip(1.0 - 0.85 * lum_s, 0.20, 1.0)
+    g_base = (0.18 * core + 0.14 * tail * skirt) * base_need
+    pore_env = np.clip(0.65 * c169 * g_eff + 0.35 * env, 0.0, 1.0)
+    pore = np.tanh(0.75 * np.clip(-field - 0.30, 0.0, None)) * pore_env
+    mean_s = np.maximum(s_f.mean(axis=2, keepdims=True), 0.06)
+    c_norm = np.clip(1.0 + 1.28 * (s_f / mean_s - 1.0), 0.66, 1.36)
+    warm = np.array([0.84, 0.96, 1.15], np.float32)
+    w_warm = np.clip(0.85 - 1.15 * lum_s, 0.10, 0.65)[..., None]
+    tint = (1.0 - w_warm) * c_norm + w_warm * warm
+    out_f = out.astype(np.float32)
+    bright = np.clip((g_base + 0.46 * spark) * g, 0.0, 0.88)[..., None] * tint
+    lifted = 255.0 - (255.0 - out_f) * (1.0 - np.clip(bright, 0.0, 0.92))
+    x_l = lifted / 255.0
+    dip = (0.42 * pore * g)[..., None] * x_l * (1.0 - x_l) * 255.0
+    return np.clip(np.round(lifted - dip), 0, 255).astype(np.uint8)
+
+
 class Scene:
     """Everything a render needs from one document state, prepared once.
 
@@ -503,11 +575,15 @@ class Scene:
         """The random fields a style draws, in the reference's order from a fresh generator seeded with SEED."""
         with self._lock:
             if style not in self._randoms:
-                rng = np.random.default_rng(SEED)
-                if style == 'grain':
+                if style == 'particle':
+                    rng = np.random.default_rng(SEED + 1)
+                    self._randoms[style] = particle_field(rng, self.h, self.w, float(np.sqrt(self.w * self.h / REF_AREA)))
+                elif style == 'grain':
+                    rng = np.random.default_rng(SEED)
                     g, gc = knit.grain_noise(rng, self.h, self.w)
                     self._randoms[style] = (g, gc, rng.random((self.h, self.w)), rng.random((self.h, self.w)))
                 else:
+                    rng = np.random.default_rng(SEED)
                     self._randoms[style] = (rng.random((self.h, self.w)), rng.random((self.h, self.w)))
             return self._randoms[style]
 
@@ -555,6 +631,18 @@ class Scene:
                                   fill=self.fill)
             with self._lock:
                 self._stretch['oily'] = maps
+        return maps
+
+    def particle_maps(self):
+        """(field, gate) of 高光粒子 over the whole image, cached: crops slice them, so a crop matches the whole."""
+        with self._lock:
+            maps = self._stretch.get('particle')
+        if maps is None:
+            field = self.randoms('particle')
+            gate = (knit.sstep(0.005, 0.04, knit._luma(self.src, 1.5)) * self.alpha * (self.R > 0)).astype(np.float32)
+            maps = (field, gate)
+            with self._lock:
+                self._stretch['particle'] = maps
         return maps
 
     def _depth(self):
@@ -804,6 +892,11 @@ class Scene:
                 moire_ready = False                 # the depth model is not ready: the render is not final yet
             else:
                 out = apply_moire(out, src, fringes[sl], q['moire'] / 100.0, self.suggested_strength() / 100.0)
+        if particle_active(q):
+            _, core, band, tail, _, centre, _ = self.oily_maps()
+            field, pgate = self.particle_maps()
+            out = apply_particles(out, src, core[sl], band[sl], tail[sl], centre[sl], field[sl], pgate[sl],
+                                  q['particle'] / 100.0)
         if weight is not None:
             r = SPARKLE_RECIPES[style]
             u1, u2 = self.randoms('lines') if r['draws'] == 'lines' else self.randoms('grain')[2:]
