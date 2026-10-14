@@ -70,6 +70,16 @@ for name, files in (('slider-density.png', ['b1-black-density-070', 'b1-black-de
                     ('slider-sparkles.png', ['b1-black-sparkles-000', 'b1-black-sparkles-100', 'b1-black-sparkles-300'])):
     save(row([load(f + '.png').crop(sl) for f in files]), name)
 
+# 高光粒子 (试验), on B1's left leg. The Texture page with its switch on at 强度 100% (Detail at 100%; scaled like the
+# other pages), and one strip of the left thigh down to the knee at 强度 0 / 35 / 70 / 100% at the pictures' own pixels:
+# four 200 px tiles 6 px apart, so 818 px wide
+for src, dst in (('b1-black-10-particle-page.png', 'particle-page.jpg'),
+                 ('b1-black-10-particle-page-en.png', 'particle-page-en.jpg')):
+    save(shot(src, 1600), dst)
+p_strip = (350, 300, 550, 700)
+save(row([load(f'b1-black-particle-{s}.png').crop(p_strip) for s in ('000', '035', '070', '100')], gap=6),
+     'particle-strength.png')
+
 # 摩尔纹效果 (试验), on B1's left thigh. The Texture page with its switch on (Detail at 100%; scaled like the other
 # pages), and 面积 35 / 50 / 70 / 100% at the pictures' own pixels: four 405 px tiles 10 px apart, so 820 px wide
 for src, dst in (('b1-black-06-moire-page.png', 'moire-page.jpg'), ('b1-black-06-moire-page-en.png', 'moire-page-en.jpg')):
