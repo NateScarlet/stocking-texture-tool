@@ -492,7 +492,7 @@ def particle_active(q):
 
 
 def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
-    """高光粒子 over a style's render: along 油光's glint tracks (core, band, tail, centre from Scene.particle_maps,
+    """高光粒子 over a style's render: along 油光's glint tracks (core, band, tail, centre from Scene.oily_maps,
     cropped like src), the highlight line is drawn as a dense stream of 1-3 px grains at the spine that thins out
     into discrete scattered particles across the skirt, with inter-particle pores breaking up smooth painted
     highlights. field, gate: Scene.particle_maps (cropped like src); amount: the 强度 slider, 0..1."""
@@ -519,25 +519,20 @@ def apply_particles(out, src, core, band, tail, centre, field, gate, amount):
     spark = np.tanh(1.05 * pos) * (0.48 + 0.52 * np.power(env, 0.38)) * (env > 0.010)
     s_f = src.astype(np.float32) / 255.0
     lum_s = s_f @ np.array([0.114, 0.587, 0.299], np.float32)
-    headroom_boost = np.clip(0.65 / np.maximum(1.0 - 0.72 * lum_s, 0.24), 1.0, 2.7)
-    base_need = np.clip(1.0 - 0.85 * lum_s, 0.18, 1.0)
+    base_need = np.clip(1.0 - 0.85 * lum_s, 0.20, 1.0)
     g_base = (0.16 * core + 0.12 * tail * skirt) * base_need
-    w_blown = knit.sstep(0.84, 0.96, lum_s)
     pore_env = np.clip(0.60 * c169 * g_eff + 0.40 * env, 0.0, 1.0)
-    pore = np.tanh(0.85 * np.clip(-field - (0.08 - 0.18 * w_blown), 0.0, None)) * pore_env
+    pore = np.tanh(0.85 * np.clip(-field - 0.08, 0.0, None)) * pore_env
     mean_s = np.maximum(s_f.mean(axis=2, keepdims=True), 0.06)
     c_norm = np.clip(1.0 + 1.28 * (s_f / mean_s - 1.0), 0.66, 1.36)
     warm = np.array([0.84, 0.96, 1.15], np.float32)
-    w_warm = np.clip(0.85 - 1.15 * lum_s, 0.05, 0.65)[..., None]
+    w_warm = np.clip(0.85 - 1.15 * lum_s, 0.10, 0.65)[..., None]
     tint = (1.0 - w_warm) * c_norm + w_warm * warm
     out_f = out.astype(np.float32)
-    bright = np.clip((g_base + 0.52 * spark * headroom_boost) * g, 0.0, 0.95)[..., None] * tint
-    lifted = 255.0 - (255.0 - out_f) * (1.0 - np.clip(bright, 0.0, 0.96))
+    bright = np.clip((g_base + 0.46 * spark) * g, 0.0, 0.88)[..., None] * tint
+    lifted = 255.0 - (255.0 - out_f) * (1.0 - np.clip(bright, 0.0, 0.92))
     x_l = lifted / 255.0
-    w_b = w_blown[..., None]
-    dip_amt = 0.46 * x_l * (1.0 - x_l) + 0.14 * w_b * (x_l ** 2)
-    pore_tint = (1.0 - w_b) + w_b * np.array([1.16, 1.04, 0.74], np.float32)
-    dip = (pore * g)[..., None] * dip_amt * pore_tint * 255.0
+    dip = (0.42 * pore * g)[..., None] * x_l * (1.0 - x_l) * 255.0
     return np.clip(np.round(lifted - dip), 0, 255).astype(np.uint8)
 
 
@@ -639,21 +634,12 @@ class Scene:
         return maps
 
     def particle_maps(self):
-        """(core, band, tail, centre, field, gate) of 高光粒子 over the whole image, cached: crops slice them, so a crop
-        matches the whole. Pale/white stockings keep the limb's glint track too (pale_glint=True), and a few pixels
-        inside every region boundary are kept clear of particles."""
+        """(field, gate) of 高光粒子 over the whole image, cached: crops slice them, so a crop matches the whole.
+        A few pixels inside every region boundary are kept clear of particles."""
         with self._lock:
             maps = self._stretch.get('particle')
         if maps is None:
             scale = float(np.sqrt(self.w * self.h / REF_AREA))
-            Y = oily.luminance(self.src)
-            regs = np.unique(self.R[self.R > 0])
-            if all(float(np.median(Y[self.R == i])) <= oily.DARK[0] for i in regs):
-                _, core, band, tail, _, centre, _ = self.oily_maps()
-            else:
-                _, core, band, tail, _, centre, _ = oily.oily_maps(
-                    self.src, self.R, self.alpha, self.A, self.V, scale,
-                    cut=self.cut, REG=self.REG, fill=self.fill, pale_glint=True)
             field = self.randoms('particle')
             same = _same_region(self.R) & (self.alpha > 0.85)
             if self.cut is not None:
@@ -664,7 +650,7 @@ class Scene:
             edge = knit.sstep(r0, r1, d_edge)
             gate = (knit.sstep(0.005, 0.04, knit._luma(self.src, 1.5))
                     * (self.alpha ** 2) * edge * (self.R > 0)).astype(np.float32)
-            maps = (core, band, tail, centre, field, gate)
+            maps = (field, gate)
             with self._lock:
                 self._stretch['particle'] = maps
         return maps
@@ -917,7 +903,8 @@ class Scene:
             else:
                 out = apply_moire(out, src, fringes[sl], q['moire'] / 100.0, self.suggested_strength() / 100.0)
         if particle_active(q):
-            core, band, tail, centre, field, pgate = self.particle_maps()
+            _, core, band, tail, _, centre, _ = self.oily_maps()
+            field, pgate = self.particle_maps()
             out = apply_particles(out, src, core[sl], band[sl], tail[sl], centre[sl], field[sl], pgate[sl],
                                   q['particle'] / 100.0)
         if weight is not None:
