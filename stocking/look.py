@@ -89,9 +89,10 @@ SPARKLE_RECIPES = {
 # moire_area (面积) how much of each bulge carries them. The fringes of two fine layers over a stretched surface are
 # contours of its height, so the bands run along the depth model's bulge (smoothed by MOIRE_BLUR px at REF_AREA
 # first), one ring for every MOIRE_STEP of the depth the stockings span: a taller bulge holds more rings, a flat one
-# none, whatever the size of its part. The 面积 slider grows the bulge from nothing to its full height, so the first
-# ring is born as a small light disc on the crown, spreads outward and is joined by more rings. A band is a sine
-# squared up by tanh (MOIRE_SHARP) into crisp edges; it shows only once the bulge has climbed MOIRE_FIRST of a step
+# none, whatever the size of its part. The rings sit at fixed steps of height below each bulge's crown, and the 面积
+# slider reveals them from the crown outward to the base: the small inner ring appears first on the crown, and as 面积
+# rises new rings are added around the outside while the inner ones stay in place. A band is a cosine squared up by
+# tanh (MOIRE_SHARP) into crisp edges; it shows only once the revealed bulge has climbed MOIRE_FIRST of a step
 # (a surface that has not yet risen half a step has no ring at all). Where the bulge changes so fast that the bands
 # would run finer than MOIRE_FADE cycles/px they fade out, as the texture's own courses do. At strength 100% a band
 # moves the stocking's lightness by MOIRE_LIGHT (at the strength a dark stocking gets, less on light ones, where the
@@ -439,21 +440,29 @@ def moire_phase(rel, disp, R, scale=1.0):
         m = R == i
         up[m] = np.maximum(rel[m] - np.percentile(rel[m], 40), 0)
     phase = _smooth_within_regions(up, R, MOIRE_BLUR * scale) / (MOIRE_STEP * max(float(hi - lo), 1e-6))
+    phase *= _same_region(R)
     gy, gx = np.gradient(phase)
     return phase, np.hypot(gx, gy).astype(np.float32)
 
 
 def moire_fringes(phase, slope, area):
-    """The moire bands, -1..1 per pixel, from moire_phase's maps with every bulge grown to area (0..1) of its height.
+    """The moire bands, -1..1 per pixel, from moire_phase's maps with the rings revealed from each bulge's crown
+    outward over area (0..1) of its height.
 
-    Dark and light bands alternate with every half step the grown bulge stands above the flat, so one that has just
-    climbed half a step shows as a small light disc on its crown; the disc spreads outward as area rises, and more
-    rings join it. It is a sine, not a cosine: the flat carries no band, and the bands add next to no light on average.
-    Where the bulge changes so fast that the bands would run finer than MOIRE_FADE cycles/px they fade out (so do the
-    outermost pixels of a region, where the map ends), so nothing here can alias."""
-    grown = area * phase
-    bands = -np.tanh(MOIRE_SHARP * np.sin(2 * np.pi * grown)) / np.tanh(MOIRE_SHARP)
-    fade = 1 - knit.sstep(MOIRE_FADE[0], MOIRE_FADE[1], area * slope)
+    The rings are fixed contours of distance in height below the crown (top - phase), a light disc at the crown and
+    alternating dark and light rings around it with every step. As area rises, the outer boundary (grown = phase -
+    (1 - area) * top) sweeps from the crown down to the flat: the innermost small ring appears first, and new rings
+    are added around the outside while the inner ones stay in place. Where the bulge changes so fast that the bands
+    would run finer than MOIRE_FADE cycles/px they fade out (so do the outermost pixels of a region, where the map
+    ends), so nothing here can alias."""
+    n, lab = cv2.connectedComponents((phase > MOIRE_FIRST[0]).astype(np.uint8), connectivity=4)
+    peaks = np.zeros(n, np.float32)
+    np.maximum.at(peaks, lab.ravel(), phase.ravel())
+    peaks[0] = 0.0
+    top = peaks[lab]
+    grown = phase - (1 - area) * top
+    bands = np.tanh(MOIRE_SHARP * np.cos(2 * np.pi * (top - phase))) / np.tanh(MOIRE_SHARP)
+    fade = 1 - knit.sstep(MOIRE_FADE[0], MOIRE_FADE[1], slope)
     return (bands * fade * knit.sstep(MOIRE_FIRST[0], MOIRE_FIRST[1], grown)).astype(np.float32)
 
 

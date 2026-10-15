@@ -662,17 +662,17 @@ def test_moire_bands_follow_the_bulge_and_add_no_light():
 
 
 def test_moire_grows_from_a_small_light_disc_on_the_crown():
-    """面积: nothing at 0, then a small light disc on the crown that spreads outward, the first dark ring appearing
-    round it and more rings after that."""
+    """面积: nothing at 0, then a small light disc on the crown, the first dark ring appearing round it and more outer
+    rings added around the outside as area rises while the inner rings stay in place."""
     s, _, _ = _dome(heights=(1.0, 4.0))                  # the first dome stands a quarter as high: a few rings, not a dozen
     phase, slope, _ = s.moire_maps()
-    left = s.R == 1
+    left, right = s.R == 1, s.R == 2
     cx, cy = s.w // 4, s.h // 2
     assert not look.moire_fringes(phase, slope, 0.0).any()
 
-    def reach(a):
-        yy, xx = np.nonzero((np.abs(look.moire_fringes(phase, slope, a)) > 0.5) & left)
-        return float(np.hypot(xx - cx, yy - cy).max()) if len(xx) else 0.0
+    def reach(a, mask=left, x0=cx):
+        yy, xx = np.nonzero((np.abs(look.moire_fringes(phase, slope, a)) > 0.5) & mask)
+        return float(np.hypot(xx - x0, yy - cy).max()) if len(xx) else 0.0
 
     small = look.moire_fringes(phase, slope, 0.2)
     assert (small[left] > 0.5).any() and not (small[left] < -0.5).any()           # a light disc, no ring yet
@@ -682,6 +682,19 @@ def test_moire_grows_from_a_small_light_disc_on_the_crown():
     assert 0 < reaches[0] < 0.6 * reaches[-1] and reaches == sorted(reaches)      # it spreads, never shrinks
     counts = [_rings(look.moire_fringes(phase, slope, a), cx) for a in areas]
     assert counts == sorted(counts) and counts[0] == 0 and counts[-1] >= 8        # and rings join it
+    # On the taller dome too, small area covers only the inner rings near the crown, and raising area adds outer rings
+    # without moving the inner ones that have already appeared.
+    cx2 = 3 * s.w // 4
+    maps = [look.moire_fringes(phase, slope, a) for a in areas]
+    covs = [float((np.abs(f[right]) > 0.1).mean()) for f in maps]
+    assert 0 < covs[0] < 0.35 * covs[-1] and covs == sorted(covs)
+    reaches2 = [reach(a, right, cx2) for a in areas]
+    assert 0 < reaches2[0] < 0.6 * reaches2[-1] and reaches2 == sorted(reaches2)
+    assert all(f[cy, cx2] > 0.5 for f in maps)
+    top2 = float(phase[right].max())
+    for a_lo, f_lo, f_hi in zip(areas[:-1], maps[:-1], maps[1:]):
+        inner = right & (phase - (1 - a_lo) * top2 >= look.MOIRE_FIRST[1])
+        assert inner.any() and np.allclose(f_hi[inner], f_lo[inner])
 
 
 def test_a_taller_bulge_holds_more_rings_whatever_its_size():
